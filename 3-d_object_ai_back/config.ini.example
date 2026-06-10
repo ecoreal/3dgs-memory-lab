@@ -1,0 +1,13 @@
+[SECRET]
+# 腾讯混元 3D 生成 API 凭证
+hunyuan_id = <YOUR_HUNYUAN_ID>
+hunyuan_key = <YOUR_HUNYUAN_KEY>
+# 火山引擎豆包(Doubao)API 凭证
+doubao_id = <YOUR_DOUBAO_ID>
+doubao_key = <YOUR_DOUBAO_KEY>
+
+[RTASR]
+# 讯飞实时语音转写(RTASR)凭证
+APP_ID = <YOUR_XF_APP_ID>
+ACCESS_KEY_ID = <YOUR_XF_ACCESS_KEY_ID>
+ACCESS_KEY_SECRET = <YOUR_XF_ACCESS_KEY_SECRET>

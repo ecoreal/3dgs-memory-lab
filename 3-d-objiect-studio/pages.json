@@ -1,0 +1,73 @@
+{
+	"pages": [
+    {
+    			"path": "pages/login/login",
+    			"style": {
+    				"navigationStyle": "custom",
+    				"app-plus": { "titleNView": false }
+    			}
+    		},
+		{
+			"path": "pages/home/home",
+			"style": {
+        "navigationStyle": "custom"
+			}
+		},
+		{
+		  "path" : "pages/workshop/workshop",
+		  "style" : 
+		  {
+		    "navigationStyle": "custom"
+		  }
+		},
+		{
+		  "path" : "pages/editor/editor",
+		  "style" : 
+		  {
+		    "navigationStyle": "custom"
+		  }
+		},
+		{
+		  "path" : "pages/scene/scene",
+		  "style" : 
+		  {
+		    "navigationStyle": "custom"
+		  }
+		},
+		{
+		  "path" : "pages/square/square",
+		  "style" : 
+		  {
+		    "navigationStyle": "custom"
+		  }
+		},
+		{
+		  "path" : "pages/profile/profile",
+		  "style" : 
+		  {
+		    "navigationStyle": "custom"
+		  }
+		},
+		{
+		  "path" : "pages/register/register",
+		  "style" : 
+		  {
+		    "navigationBarTitleText" : ""
+		  }
+		},
+		{
+		  "path": "pages/space-detail/space-detail",
+		  "style": {
+		    "navigationBarTitleText": "展厅详情",
+		    "navigationStyle": "custom"
+		  }
+		}
+	],
+	"globalStyle": {
+		"navigationBarTextStyle": "black",
+		"navigationBarTitleText": "一方阁",
+		"navigationBarBackgroundColor": "#F8F8F8",
+		"backgroundColor": "#F8F8F8"
+	},
+	"uniIdRouter": {}
+}

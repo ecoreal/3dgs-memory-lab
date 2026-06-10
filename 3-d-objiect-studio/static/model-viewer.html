@@ -1,0 +1,2280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D模型查看器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+            font-family: Arial, sans-serif;
+            background: transparent;
+        }
+        
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        
+        #canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 16px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 20px 30px;
+            border-radius: 10px;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+            max-width: 80%;
+        }
+        
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        #error {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff6b6b;
+            font-size: 16px;
+            z-index: 100;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px 30px;
+            border-radius: 10px;
+            text-align: center;
+            max-width: 80%;
+            display: none;
+        }
+        
+        .retry-btn {
+            margin-top: 15px;
+            padding: 8px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .retry-btn:hover {
+            background: #45a049;
+        }
+        
+        .controls-hint {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: rgba(255, 255, 255, 0.7);
+            background: rgba(0, 0, 0, 0.5);
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 11px;
+            z-index: 10;
+            pointer-events: none;
+            backdrop-filter: blur(4px);
+        }
+        
+        #status-notifications {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 10px;
+        }
+        
+        .status-notification {
+            background: rgba(66, 66, 66, 0.9);
+            color: white;
+            padding: 12px 16px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            backdrop-filter: blur(10px);
+            border-left: 4px solid #757575;
+            max-width: 300px;
+            min-width: 200px;
+            animation: slideIn 0.3s ease;
+        }
+        
+        .status-notification.success {
+            background: rgba(76, 175, 80, 0.9);
+            border-left-color: #4CAF50;
+        }
+        
+        .status-notification.error {
+            background: rgba(244, 67, 54, 0.9);
+            border-left-color: #F44336;
+        }
+        
+        .status-notification.info {
+            background: rgba(33, 150, 243, 0.9);
+            border-left-color: #2196F3;
+        }
+        
+        .status-notification.progress {
+            background: rgba(66, 66, 66, 0.9);
+            border-left-color: #757575;
+        }
+        
+        .notification-text {
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        
+        #control-panel {
+            position: fixed;
+            top: 12px;
+            left: 12px; 
+            background: rgba(30, 30, 30, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 8px;
+            padding: 16px;
+            color: white;
+            font-family: Arial, sans-serif;
+            z-index: 1000;
+            min-width: 240px;
+            max-width: 280px;
+			max-height: calc(100vh - 24px); 
+			overflow-y: auto; 
+            box-shadow: 0 6px 24px rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.1);
+            transform: translateX(-100%);
+            transition: transform 0.3s ease;
+        }
+		
+		#control-panel::-webkit-scrollbar {
+		    width: 6px;
+		}
+		
+		#control-panel::-webkit-scrollbar-track {
+		    background: rgba(255, 255, 255, 0.05);
+		    border-radius: 3px;
+		}
+		
+		#control-panel::-webkit-scrollbar-thumb {
+		    background: rgba(255, 255, 255, 0.2);
+		    border-radius: 3px;
+		}
+		
+		#control-panel::-webkit-scrollbar-thumb:hover {
+		    background: rgba(255, 255, 255, 0.3);
+		}
+        
+        .control-panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px; 
+            padding-bottom: 8px; 
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .control-panel-header h3 {
+            margin: 0;
+            font-size: 14px; 
+        }
+        
+        .control-panel-close {
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-size: 16px; 
+            padding: 0;
+            width: 20px; 
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 3px; 
+        }
+        
+        .control-panel-close:hover {
+            background: rgba(255,255,255,0.1);
+        }
+        
+        .control-group {
+            margin-bottom: 16px; 
+        }
+        
+        .control-label {
+            font-size: 13px; 
+            margin-bottom: 6px; 
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .control-label span {
+            opacity: 0.8;
+        }
+        
+
+        .control-button-group {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        
+        .control-button {
+            padding: 6px 12px; 
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            flex: 1;
+            font-size: 12px;
+            transition: background 0.2s;
+        }
+        
+        .control-button:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        
+        .control-button.active {
+            background: rgba(33, 150, 243, 0.5);
+            border-color: rgba(33, 150, 243, 0.7);
+        }
+        
+        .control-slider {
+            width: 100%;
+            height: 5px;
+            border-radius: 3px;
+            background: rgba(255,255,255,0.1);
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        .control-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px; 
+            height: 16px;
+            border-radius: 50%;
+            background: #2196F3;
+            cursor: pointer;
+        }
+        
+        .control-slider::-moz-range-thumb {
+            width: 16px;
+            height: 16px; 
+            border-radius: 50%;
+            background: #2196F3;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .control-toggle {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        
+        .toggle-label {
+            font-size: 13px;
+        }
+        
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 45px;
+            height: 22px; 
+        }
+        
+        .toggle-checkbox {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 22px;
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        
+        .toggle-checkbox:checked + .toggle-slider {
+            background-color: #2196F3;
+        }
+        
+        .toggle-checkbox:checked + .toggle-slider:before {
+            transform: translateX(23px);
+        }
+        
+        .reset-view-btn {
+            padding: 8px 12px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+            width: 100%;
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+        
+        .reset-view-btn:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        
+        #control-panel-trigger {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: rgba(30, 30, 30, 0.85);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.08);
+            color: rgba(255,255,255,0.9);
+            font-size: 16px;
+            cursor: pointer;
+            z-index: 999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            transition: transform 0.2s, background 0.2s;
+        }
+        
+        #control-panel-trigger:hover {
+            transform: scale(1.05);
+            background: rgba(40, 40, 40, 0.9);
+        }
+        
+        #dust-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 3;
+            pointer-events: auto;
+        }
+        
+        #dust-particles {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 4;
+        }
+        
+        .dust-intro-mask {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1001;
+        }
+        
+		.dust-intro-box {
+			background: rgba(30, 30, 30, 0.9);
+			border-radius: 12px;
+			padding: 30px;
+			color: white;
+			text-align: center;
+			max-width: 400px;
+			width: 90%;
+			max-height: 80vh;
+			overflow-y: auto; 
+		}
+
+        .dust-intro-icon-wrap {
+            margin-bottom: 20px;
+        }
+        
+        .dust-intro-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .dust-intro-desc {
+            font-size: 14px;
+            opacity: 0.8;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        
+        .dust-intro-tip {
+            margin-bottom: 20px;
+        }
+        
+        .dust-intro-tip-txt {
+            font-size: 12px;
+            opacity: 0.6;
+        }
+        
+        .dust-intro-btn {
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dust-intro-btn:hover {
+            background: #45a049;
+        }
+        
+        .dust-bar-wrap {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80%;
+            max-width: 400px;
+            z-index: 1000;
+        }
+        
+        .dust-bar-track {
+            height: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .dust-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #8BC34A);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .dust-reveal-mask {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1001;
+        }
+        
+		.dust-reveal-box {
+			background: rgba(30, 30, 30, 0.9);
+			border-radius: 12px;
+			padding: 30px;
+			color: white;
+			text-align: center;
+			max-width: 400px;
+			width: 90%; 
+			max-height: 80vh; 
+			overflow-y: auto;
+		}
+        
+		@media (max-width: 599px) {
+		    .dust-intro-box, .dust-reveal-box {
+		        padding: 20px; 
+		        max-width: 90vw;
+		        width: 85vw; 
+		        max-height: 70vh; 
+		    }
+		    
+		    .dust-intro-title, .dust-reveal-title {
+		        font-size: 18px; 
+		        margin-bottom: 8px; 
+		    }
+		    
+		    .dust-intro-desc, .dust-reveal-desc {
+		        font-size: 13px; 
+		        margin-bottom: 15px;
+		    }
+		    
+		    .dust-intro-tip-txt, .dust-reveal-btn {
+		        font-size: 12px;
+		    }
+		    
+		    .dust-intro-btn, .dust-reveal-btn {
+		        padding: 8px 16px;
+		        font-size: 13px;
+		    }
+
+		    .dust-intro-icon-wrap svg {
+		        width: 24px;
+		        height: 24px;
+		    }
+		}
+		
+		@media (max-width: 375px) {
+		    .dust-intro-box, .dust-reveal-box {
+		        padding: 15px;
+		        width: 80vw;
+		    }
+		    
+		    .dust-intro-title, .dust-reveal-title {
+		        font-size: 16px;
+		    }
+		    
+		    .dust-intro-desc, .dust-reveal-desc {
+		        font-size: 12px;
+		        line-height: 1.4;
+		    }
+		}
+		
+        .dust-reveal-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .dust-reveal-desc {
+            font-size: 14px;
+            opacity: 0.8;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        
+        .dust-reveal-btn {
+            padding: 10px 20px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dust-reveal-btn:hover {
+            background: #1976D2;
+        }
+        
+        .bg-panel-mask {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1002;
+        }
+        
+        .bg-panel {
+            background: rgba(30, 30, 30, 0.95);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow: hidden;
+        }
+        
+        .bg-panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .bg-panel-title {
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        
+        .bg-panel-close {
+            color: white;
+            cursor: pointer;
+            font-size: 20px;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        
+        .bg-panel-close:hover {
+            opacity: 1;
+        }
+        
+        .bg-panel-body {
+            padding: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .bg-option {
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 10px;
+            cursor: pointer;
+            transition: background 0.2s;
+            position: relative;
+        }
+        
+        .bg-option:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        
+        .bg-option.active {
+            background: rgba(33, 150, 243, 0.3);
+            border: 2px solid #2196F3;
+        }
+        
+        .bg-opt-thumb {
+            width: 100%;
+            height: 80px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 8px;
+            background-size: cover;
+            background-position: center;
+        }
+        
+        .bg-opt-label {
+            color: white;
+            font-size: 12px;
+            text-align: center;
+        }
+        
+        .bg-opt-check {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        
+        .brightness-bar {
+            display: none;
+        }
+        
+        .viewer-hint {
+            display: none;
+        }
+        
+        .bg-toggle-btn {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <canvas id="canvas"></canvas>
+        
+        <div id="loading">
+            <div class="loading-spinner"></div>
+            <div id="loading-text">正在加载3D模型...</div>
+        </div>
+        
+        <div id="error">
+            <div id="error-text">模型加载失败</div>
+            <button class="retry-btn" onclick="retryLoad()">重试</button>
+        </div>
+        
+        <div id="status-notifications"></div>
+        
+        <button id="control-panel-trigger" title="设置">⚙</button>
+    </div>
+
+    <div id="dust-layer"></div>
+    <div id="dust-particles"></div>
+    
+    <div id="dust-intro-mask" class="dust-intro-mask" style="display: none;">
+        <div class="dust-intro-box">
+            <div class="dust-intro-icon-wrap">
+                <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+                    <path d="M16 4C10 4 6 8 6 14C6 20 10 26 16 28C22 26 26 20 26 14C26 8 22 4 16 4Z" stroke="#8B4513" stroke-width="1.2" fill="rgba(139,69,19,0.08)"/>
+                    <line x1="16" y1="10" x2="16" y2="18" stroke="#8B4513" stroke-width="1.5" stroke-linecap="round"/>
+                    <circle cx="16" cy="22" r="1" fill="#8B4513"/>
+                </svg>
+            </div>
+            <div class="dust-intro-title">发现数字文物</div>
+            <div class="dust-intro-desc">这件藏品被岁月尘埃所覆盖，用手指或鼠标轻轻拂去，让它重见天日。</div>
+            <div class="dust-intro-tip">
+                <div class="dust-intro-tip-txt">移动鼠标 · 滑动手指开始探索</div>
+            </div>
+            <div class="dust-intro-btn" onclick="startDustBrush()">开始清扫</div>
+        </div>
+    </div>
+    
+    <div id="dust-bar-wrap" class="dust-bar-wrap" style="display: none;">
+        <div class="dust-bar-track">
+            <div class="dust-bar-fill" id="dust-bar-fill" style="width: 0%"></div>
+        </div>
+    </div>
+    
+    <div id="dust-reveal-mask" class="dust-reveal-mask" style="display: none;">
+        <div class="dust-reveal-box">
+            <div class="dust-reveal-title">文物已现身</div>
+            <div class="dust-reveal-desc">尘埃已清扫完毕，现在可以自由旋转和放大查看这件珍贵的藏品了。</div>
+            <div class="dust-reveal-btn" onclick="closeDustReveal()">开始探索 →</div>
+        </div>
+    </div>
+    
+    <div id="control-panel">
+        <div class="control-panel-header">
+            <h3>控制</h3>
+            <button class="control-panel-close" onclick="toggleControlPanel()">✕</button>
+        </div>
+        
+        <div class="control-group">
+            <div class="control-label">
+                <span>亮度</span>
+                <span id="brightness-value">4.0</span>
+            </div>
+            <input type="range" class="control-slider" id="brightness-slider" 
+                   min="0.1" max="20" step="0.1" value="4.0">
+        </div>
+        
+        <div class="control-group">
+            <div class="control-label">背景设置</div>
+            <div class="control-button-group" id="bg-mode-buttons">
+                <button class="control-button" onclick="setBackgroundMode('default')" id="bg-default-btn">深色</button>
+                <button class="control-button" onclick="setBackgroundMode('preset')" id="bg-preset-btn">预设</button>
+                <button class="control-button" onclick="setBackgroundMode('camera')" id="bg-camera-btn">摄像头</button>
+            </div>
+        </div>
+        
+        <div class="control-toggle">
+            <span class="toggle-label">自动旋转</span>
+            <label class="toggle-switch">
+                <input type="checkbox" class="toggle-checkbox" id="auto-rotate-toggle">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+        
+        <div class="control-group">
+            <button class="reset-view-btn" onclick="resetView()" style="width: 100%; margin-top: 10px;">
+                重置视图
+            </button>
+        </div>
+    </div>
+    
+    <div id="bg-panel-mask" class="bg-panel-mask" style="display: none;">
+        <div class="bg-panel">
+            <div class="bg-panel-header">
+                <div class="bg-panel-title">选择展馆背景</div>
+                <div class="bg-panel-close" onclick="closeBgPanel()">✕</div>
+            </div>
+            <div class="bg-panel-body" id="bg-panel-body">
+                
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
+    <script>
+        // ==================== 配置和全局变量 ====================
+        const Config = {
+            modelUrl: null,
+            brightness: 4.0,
+            backgroundColor: 0x1a1a1a,
+            autoRotate: false,
+            autoRotateSpeed: 1.0,
+            enableShadows: true,
+            enableAntiAlias: true,
+            maxFPS: 60,
+            baseUrl: '',
+            bgMode: 'default',
+            currentBgUrl: '',
+            bgMode: 'default',
+            currentBgUrl: '',
+            presetBgs: [] 
+        };
+
+        let scene, camera, renderer, controls, model;
+        let mixer, clock;
+        let currentAnimation = null;
+        let isLoading = false;
+        let loadAttempts = 0;
+        const MAX_LOAD_ATTEMPTS = 3;
+
+        let lastFrameTime = 0;
+        let frameCount = 0;
+        let fps = 0;
+        let fpsTimer = 0;
+        
+        // 尘埃效果
+        let dustCanvas = null;
+        let dustCtx = null;
+        let dustFullyCleared = false;
+        let dustProgress = 0;
+        let dustBrushing = false;
+        let dustAudioCtx = null;
+        let dustTotalPixels = 0;
+        let dustCheckTimer = null;
+        let dustShowIntro = true;
+        let dustShowReveal = false;
+        
+        // 状态通知系统
+        let statusNotifier = null;
+        
+        // 背景系统相关变量
+        let cameraStream = null;
+        let videoTexture = null;
+        let currentTexture = null;
+        let presetBgs = [
+            { 
+                label: '老上海弄堂', 
+                thumb: 'https://p1.itc.cn/images01/20220322/2cb3504adb5446fdb8c4fee33ed5bcb4.jpeg', 
+                url: 'https://p1.itc.cn/images01/20220322/2cb3504adb5446fdb8c4fee33ed5bcb4.jpeg' 
+            },
+            { 
+                label: '蒸汽火车站', 
+                thumb: 'https://images.unsplash.com/photo-1474487548417-781cb71495f3?w=300&q=60', 
+                url: 'https://images.unsplash.com/photo-1474487548417-781cb71495f3?w=1200&q=80' 
+            },
+            { 
+                label: '老式书房', 
+                thumb: 'https://5b0988e595225.cdn.sohucs.com/images/20190911/78838327de5840e591a6011d78b77541.jpeg', 
+                url: 'https://5b0988e595225.cdn.sohucs.com/images/20190911/78838327de5840e591a6011d78b77541.jpeg' 
+            },
+            { 
+                label: '复古市集', 
+                thumb: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=300&q=60', 
+                url: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=1200&q=80' 
+            },
+            { 
+                label: '旧时钟铺', 
+                thumb: 'https://images.unsplash.com/photo-1495364141860-b0d03eccd065?w=300&q=60', 
+                url: 'https://images.unsplash.com/photo-1495364141860-b0d03eccd065?w=1200&q=80' 
+            },
+            { 
+                label: '博物馆', 
+                thumb: 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=300&q=60', 
+                url: 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=1200&q=80' 
+            },
+            { 
+                label: '星空', 
+                thumb: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=300&q=60', 
+                url: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1200&q=80' 
+            },
+            { 
+                label: '古建筑', 
+                thumb: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=300&q=60', 
+                url: 'https://images.unsplash.com/photo-1508804185872-d7badad00f7d?w=1200&q=80' 
+            },
+            { 
+                label: '赛博都市', 
+                thumb: 'https://images.unsplash.com/photo-1542831371-29b0f74f9713?w=300&q=60', 
+                url: 'https://images.unsplash.com/photo-1542831371-29b0f74f9713?w=1200&q=80' 
+            },
+        ];
+        
+        // ==================== URL 参数处理 ====================
+        function getUrlParams() {
+            const search = window.location.search.substring(1);
+            const params = {};
+            
+            if (search) {
+                const pairs = search.split('&');
+                for (let i = 0; i < pairs.length; i++) {
+                    const pair = pairs[i].split('=');
+                    if (pair.length === 2) {
+                        const key = decodeURIComponent(pair[0]);
+                        const value = decodeURIComponent(pair[1] || '');
+                        params[key] = value;
+                    }
+                }
+            }
+            
+            return {
+                // 必需参数
+                model: params.model || null,
+                base_url: params.base_url || null,
+                
+                // 可选参数
+                brightness: parseFloat(params.brightness) || Config.brightness,
+                autoRotate: params.autoRotate === 'true',
+                autoRotateSpeed: parseFloat(params.autoRotateSpeed) || Config.autoRotateSpeed,
+                
+                // 特殊参数
+                localPath: params.localPath,
+                isStatic: params.isStatic === 'true'
+            };
+        }
+        
+        // ==================== 初始化函数 ====================
+        function init() {
+            console.log('初始化 3D 模型查看器...');
+
+            const params = getUrlParams();
+            applyConfig(params);
+
+            if (!isWebGLAvailable()) {
+                showError('您的浏览器不支持 WebGL，无法显示 3D 内容');
+                return;
+            }
+
+            Config.modelUrl = decodeURIComponent(Config.model);
+
+            if (!Config.modelUrl) {
+                showError('未提供模型路径');
+                return;
+            }
+
+            try {
+                initThreeJS();
+                setupLights();
+                setupControls(); 
+                setupEventListeners();
+
+                initStatusNotifier();
+
+                initControlPanel();
+
+                loadModel();
+
+                clock = new THREE.Clock();
+                animate();
+                
+                console.log('3D 查看器初始化完成');
+            } catch (error) {
+                console.error('初始化失败:', error);
+                showError(`初始化失败: ${error.message}`);
+            }
+        }
+        
+        function applyConfig(params) {
+            Object.assign(Config, params);
+        }
+        
+        function initThreeJS() {
+            const container = document.getElementById('container');
+
+            scene = new THREE.Scene();
+
+            scene.background = new THREE.Color(Config.backgroundColor);
+            scene.fog = new THREE.Fog(Config.backgroundColor, 10, 50);
+
+            camera = new THREE.PerspectiveCamera(
+                60,
+                container.clientWidth / container.clientHeight,
+                0.1,
+                1000
+            );
+            camera.position.set(5, 5, 5);
+
+            const canvas = document.getElementById('canvas');
+            renderer = new THREE.WebGLRenderer({ 
+                canvas: canvas,
+                antialias: true,
+                alpha: true,
+                powerPreference: 'high-performance',
+                preserveDrawingBuffer: true
+            });
+            
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+            
+            console.log('Three.js 初始化完成');
+        }
+        
+        function setupLights() {
+            // 环境光
+            const ambientLight = new THREE.AmbientLight(0xffffff, Config.brightness * 0.3);
+            scene.add(ambientLight);
+            
+            // 主方向光
+            const mainLight = new THREE.DirectionalLight(0xffffff, Config.brightness * 0.5);
+            mainLight.position.set(10, 20, 5);
+            mainLight.castShadow = true;
+            
+            mainLight.shadow.camera.left = -10;
+            mainLight.shadow.camera.right = 10;
+            mainLight.shadow.camera.top = 10;
+            mainLight.shadow.camera.bottom = -10;
+            mainLight.shadow.mapSize.width = 1024;
+            mainLight.shadow.mapSize.height = 1024;
+            
+            scene.add(mainLight);
+            
+            // 补光
+            const fillLight = new THREE.DirectionalLight(0xffffff, Config.brightness * 0.2);
+            fillLight.position.set(-10, 10, -5);
+            scene.add(fillLight);
+			
+			// 底部补光 - 从下向上照亮模型底部
+			const bottomLight = new THREE.DirectionalLight(0xffffff, Config.brightness * 0.1);
+			bottomLight.position.set(0, -5, 0);  
+			bottomLight.castShadow = false;
+			scene.add(bottomLight);
+            
+            // 背光
+            const backLight = new THREE.DirectionalLight(0xffffff, Config.brightness * 0.1);
+            backLight.position.set(0, 5, -10);
+            scene.add(backLight);
+            
+            console.log('灯光设置完成');
+        }
+
+        function setupControls() {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.autoRotate = Config.autoRotate;
+            controls.autoRotateSpeed = Config.autoRotateSpeed;
+            controls.enableZoom = true;         
+            controls.enablePan = true;
+            controls.maxDistance = 50;
+            controls.minDistance = 0.5;
+            controls.minPolarAngle = 0;
+            controls.maxPolarAngle = Math.PI;
+
+            controls.touches = {
+                ONE: THREE.TOUCH.ROTATE,     
+                TWO: THREE.TOUCH.DOLLY_PAN 
+            };
+
+            controls.enableRotate = true;   
+            controls.enableDolly = true;    
+            controls.zoomSpeed = 1.2;      
+        }
+        
+        // ==================== 状态通知系统 ====================
+        function initStatusNotifier() {
+            statusNotifier = {
+                notifications: [],
+                
+                showSuccess: function(message, duration = 3000) {
+                    this.showNotification(message, 'success', duration);
+                },
+                
+                showError: function(message, duration = 5000) {
+                    this.showNotification(message, 'error', duration);
+                },
+                
+                showInfo: function(message, duration = 3000) {
+                    this.showNotification(message, 'info', duration);
+                },
+                
+                showProgress: function(message, progress = 0) {
+                    const notification = this.createNotificationElement(message, 'progress');
+
+                    const progressBar = document.createElement('div');
+                    progressBar.className = 'progress-bar';
+                    progressBar.style.cssText = `
+                        width: 100%;
+                        height: 4px;
+                        background: rgba(255,255,255,0.2);
+                        border-radius: 2px;
+                        margin-top: 8px;
+                        overflow: hidden;
+                    `;
+                    
+                    const progressFill = document.createElement('div');
+                    progressFill.className = 'progress-fill';
+                    progressFill.style.cssText = `
+                        width: ${progress}%;
+                        height: 100%;
+                        background: linear-gradient(90deg, #4CAF50, #8BC34A);
+                        transition: width 0.3s ease;
+                    `;
+                    
+                    progressBar.appendChild(progressFill);
+                    notification.appendChild(progressBar);
+                    
+                    document.getElementById('status-notifications').appendChild(notification);
+                    
+                    const notificationId = Date.now();
+                    this.notifications.push({
+                        id: notificationId,
+                        element: notification,
+                        progressFill: progressFill
+                    });
+                    
+                    return {
+                        id: notificationId,
+                        update: (newProgress, newMessage = null) => {
+                            const notif = this.notifications.find(n => n.id === notificationId);
+                            if (notif) {
+                                if (newMessage) {
+                                    notif.element.querySelector('.notification-text').textContent = newMessage;
+                                }
+                                notif.progressFill.style.width = `${newProgress}%`;
+                            }
+                        },
+                        remove: () => {
+                            const index = this.notifications.findIndex(n => n.id === notificationId);
+                            if (index !== -1) {
+                                const notif = this.notifications[index];
+                                notif.element.style.animation = 'slideIn 0.3s ease reverse';
+                                setTimeout(() => {
+                                    if (notif.element.parentNode) {
+                                        notif.element.parentNode.removeChild(notif.element);
+                                    }
+                                }, 300);
+                                this.notifications.splice(index, 1);
+                            }
+                        }
+                    };
+                },
+                
+                showNotification: function(message, type, duration) {
+                    const notification = this.createNotificationElement(message, type);
+                    document.getElementById('status-notifications').appendChild(notification);
+                    
+                    if (duration > 0) {
+                        setTimeout(() => {
+                            if (notification.parentNode) {
+                                notification.style.animation = 'slideIn 0.3s ease reverse';
+                                setTimeout(() => {
+                                    if (notification.parentNode) {
+                                        notification.parentNode.removeChild(notification);
+                                    }
+                                }, 300);
+                            }
+                        }, duration);
+                    }
+                    
+                    return notification;
+                },
+                
+                createNotificationElement: function(message, type) {
+                    const notification = document.createElement('div');
+                    notification.className = `status-notification ${type}`;
+                    
+                    const text = document.createElement('div');
+                    text.className = 'notification-text';
+                    text.textContent = message;
+                    
+                    notification.appendChild(text);
+                    return notification;
+                }
+            };
+        }
+        
+        // ==================== 控制面板系统 ====================
+        function initControlPanel() {
+            // 加载保存的设置
+            loadSavedSettings();
+            
+            // 设置控制面板初始状态
+            document.getElementById('brightness-slider').value = Config.brightness;
+            document.getElementById('brightness-value').textContent = Config.brightness.toFixed(1);
+            
+            document.getElementById('auto-rotate-toggle').checked = Config.autoRotate;
+            
+            // 设置事件监听
+            document.getElementById('brightness-slider').addEventListener('input', function(e) {
+                const value = parseFloat(e.target.value);
+                document.getElementById('brightness-value').textContent = value.toFixed(1);
+                setBrightness(value);
+            });
+            
+            document.getElementById('auto-rotate-toggle').addEventListener('change', function(e) {
+                Config.autoRotate = e.target.checked;
+                if (controls) {
+                    controls.autoRotate = Config.autoRotate;
+                }
+                saveToStorage('autoRotate', Config.autoRotate);
+            });
+            
+            // 控制面板触发按钮
+            document.getElementById('control-panel-trigger').addEventListener('click', toggleControlPanel);
+            
+            // 初始化背景控制按钮状态
+            updateBgModeButtons();
+            
+            // 应用保存的背景设置
+            applyBackgroundMode();
+        }
+        
+        function toggleControlPanel() {
+            const panel = document.getElementById('control-panel');
+            const isOpen = panel.style.transform !== 'translateX(-100%)';
+            panel.style.transform = isOpen ? 'translateX(-100%)' : 'translateX(0)';
+        }
+        
+        function loadSavedSettings() {
+            const savedBrightness = loadFromStorage('brightness', Config.brightness);
+            const savedAutoRotate = loadFromStorage('autoRotate', Config.autoRotate);
+            const savedBgMode = loadFromStorage('bgMode', Config.bgMode);
+            const savedBgUrl = loadFromStorage('currentBgUrl', Config.currentBgUrl);
+            
+            Config.brightness = savedBrightness;
+            Config.autoRotate = savedAutoRotate;
+            Config.bgMode = savedBgMode;
+            Config.currentBgUrl = savedBgUrl;
+        }
+        
+        function saveToStorage(key, value) {
+            try {
+                const storageKey = `3d_viewer_${key}`;
+                localStorage.setItem(storageKey, JSON.stringify(value));
+            } catch (e) {
+                console.warn('保存设置失败:', e);
+            }
+        }
+        
+        function loadFromStorage(key, defaultValue) {
+            try {
+                const storageKey = `3d_viewer_${key}`;
+                const value = localStorage.getItem(storageKey);
+                return value ? JSON.parse(value) : defaultValue;
+            } catch (e) {
+                return defaultValue;
+            }
+        }
+        
+        // ==================== 背景系统功能 - 新增 ====================
+        function updateBgModeButtons() {
+            const buttons = document.querySelectorAll('#bg-mode-buttons .control-button');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            
+            switch(Config.bgMode) {
+                case 'default':
+                    document.getElementById('bg-default-btn').classList.add('active');
+                    break;
+                case 'preset':
+                    document.getElementById('bg-preset-btn').classList.add('active');
+                    break;
+                case 'camera':
+                    document.getElementById('bg-camera-btn').classList.add('active');
+                    break;
+            }
+        }
+        
+        function setBackgroundMode(mode, url = '') {
+            console.log('设置背景模式:', mode, 'URL:', url);
+            
+            // 停止之前的摄像头流
+            if (Config.bgMode === 'camera' && mode !== 'camera') {
+                stopCamera();
+            }
+            
+            Config.bgMode = mode;
+            Config.currentBgUrl = url;
+            
+            // 保存到存储
+            saveToStorage('bgMode', mode);
+            if (url) saveToStorage('currentBgUrl', url);
+            
+            // 更新按钮状态
+            updateBgModeButtons();
+            
+            // 应用背景模式
+            applyBackgroundMode();
+            
+            // 如果选择了预设模式但没有指定URL，显示背景选择面板
+            if (mode === 'preset' && !url) {
+                showBgPanel();
+            }
+        }
+        
+        async function applyBackgroundMode() {
+            switch(Config.bgMode) {
+                case 'default':
+                    applyDefaultBackground();
+                    break;
+                case 'preset':
+                    if (Config.currentBgUrl) {
+                        await applyPresetBackground(Config.currentBgUrl);
+                    } else {
+                        // 如果没有预设URL，回退到默认背景
+                        applyDefaultBackground();
+                    }
+                    break;
+                case 'camera':
+                    await enableCameraBackground();
+                    break;
+            }
+        }
+        
+        function applyDefaultBackground() {
+            console.log('应用默认背景');
+            if (currentTexture) {
+                currentTexture.dispose();
+                currentTexture = null;
+            }
+            scene.background = new THREE.Color(Config.backgroundColor);
+            scene.fog = new THREE.Fog(Config.backgroundColor, 10, 50);
+            statusNotifier.showInfo('已切换为深色背景');
+        }
+        
+        async function applyPresetBackground(url) {
+            console.log('应用预设背景:', url);
+            try {
+                if (currentTexture) {
+                    currentTexture.dispose();
+                    currentTexture = null;
+                }
+                
+                statusNotifier.showInfo('正在加载背景图片...', 2000);
+                
+                const textureLoader = new THREE.TextureLoader();
+                textureLoader.load(
+                    url,
+                    (texture) => {
+                        currentTexture = texture;
+                        scene.background = texture;
+                        scene.fog = null; // 清除雾效，让背景更清晰
+                        console.log('预设背景加载成功');
+                        statusNotifier.showSuccess('背景已切换');
+                    },
+                    undefined,
+                    (error) => {
+                        console.error('背景图片加载失败:', error);
+                        statusNotifier.showError('背景加载失败，已回退到默认背景');
+                        setBackgroundMode('default');
+                    }
+                );
+            } catch (error) {
+                console.error('应用预设背景失败:', error);
+                statusNotifier.showError('背景设置失败，已回退到默认背景');
+                setBackgroundMode('default');
+            }
+        }
+        
+        async function enableCameraBackground() {
+            console.log('启用摄像头背景');
+            
+            // 检查浏览器是否支持摄像头
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                statusNotifier.showError('您的浏览器不支持摄像头功能');
+                setBackgroundMode('default');
+                return;
+            }
+            
+            try {
+                // 请求摄像头权限
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment', // 优先使用后置摄像头
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+                
+                cameraStream = stream;
+                
+                // 创建视频元素
+                const video = document.createElement('video');
+                video.srcObject = stream;
+                video.autoplay = true;
+                video.playsInline = true;
+                video.style.display = 'none';
+                document.body.appendChild(video);
+                
+                // 等待视频可以播放
+                await new Promise((resolve) => {
+                    video.onloadeddata = resolve;
+                });
+                
+                // 创建视频纹理
+                if (currentTexture) {
+                    currentTexture.dispose();
+                }
+                
+                videoTexture = new THREE.VideoTexture(video);
+                videoTexture.minFilter = THREE.LinearFilter;
+                videoTexture.magFilter = THREE.LinearFilter;
+                videoTexture.format = THREE.RGBFormat;
+                
+                scene.background = videoTexture;
+                scene.fog = null; // 清除雾效
+                currentTexture = videoTexture;
+                
+                console.log('摄像头背景启用成功');
+                statusNotifier.showSuccess('摄像头背景已启用');
+                
+            } catch (error) {
+                console.error('摄像头访问失败:', error);
+                let errorMessage = '无法访问摄像头';
+                
+                if (error.name === 'NotAllowedError') {
+                    errorMessage = '摄像头权限被拒绝，请允许访问摄像头';
+                } else if (error.name === 'NotFoundError') {
+                    errorMessage = '未找到可用的摄像头';
+                } else if (error.name === 'NotReadableError') {
+                    errorMessage = '摄像头正被其他应用占用';
+                }
+                
+                statusNotifier.showError(errorMessage);
+                setBackgroundMode('default');
+            }
+        }
+        
+        function stopCamera() {
+            if (cameraStream) {
+                cameraStream.getTracks().forEach(track => {
+                    track.stop();
+                });
+                cameraStream = null;
+            }
+            
+            if (videoTexture) {
+                videoTexture.dispose();
+                videoTexture = null;
+            }
+            
+            // 清理视频元素
+            const videos = document.querySelectorAll('video');
+            videos.forEach(video => {
+                if (video.parentNode) {
+                    video.parentNode.removeChild(video);
+                }
+            });
+        }
+        
+        function showBgPanel() {
+            const panel = document.getElementById('bg-panel-mask');
+            const body = document.getElementById('bg-panel-body');
+            
+            if (!panel || !body) {
+                console.error('背景面板元素不存在');
+                return;
+            }
+            
+            // 清空并重新生成背景选项
+            body.innerHTML = '';
+            
+            presetBgs.forEach((bg, index) => {
+                const option = document.createElement('div');
+                option.className = 'bg-option';
+                if (Config.bgMode === 'preset' && Config.currentBgUrl === bg.url) {
+                    option.classList.add('active');
+                }
+                
+                option.innerHTML = `
+                    <div class="bg-opt-thumb" style="background-image: url(${bg.thumb})"></div>
+                    <div class="bg-opt-label">${bg.label}</div>
+                    ${Config.bgMode === 'preset' && Config.currentBgUrl === bg.url ? 
+                        '<div class="bg-opt-check">✓</div>' : ''}
+                `;
+                
+                option.onclick = () => {
+                    setBackgroundMode('preset', bg.url);
+                    closeBgPanel();
+                };
+                
+                body.appendChild(option);
+            });
+            
+            panel.style.display = 'flex';
+        }
+        
+        function closeBgPanel() {
+            const panel = document.getElementById('bg-panel-mask');
+            if (panel) {
+                panel.style.display = 'none';
+            }
+        }
+        
+        // ==================== 模型加载函数 ====================
+        function loadModel() {
+            if (isLoading) return;
+            
+            isLoading = true;
+            loadAttempts = 0;
+            
+            updateLoadingText('准备加载模型...');
+
+            if (Config.isStatic) {
+				console.log(`Config.base_url :: ${Config.base_url}`);
+                const urlObj = new URL(Config.base_url);
+                urlObj.pathname = ''; 
+                const newUrl = urlObj.origin + Config.modelUrl;
+                
+                loadFromUrl(newUrl);
+            } else {
+                // 动态模型：尝试多个可能的路径
+                const possiblePaths = generatePossiblePaths(Config.modelUrl, Config.localPath);
+                tryPathsSequentially(possiblePaths, 0);
+            }
+        }
+        
+        function generatePossiblePaths(modelUrl, localPath) {
+            const paths = [];
+
+            paths.push(modelUrl);
+            
+            if (localPath) {
+                const decodedLocalPath = decodeURIComponent(localPath);
+
+                paths.push(
+                    decodedLocalPath,
+                    '../' + decodedLocalPath.replace('/static/', ''),
+                    '../../' + decodedLocalPath.replace('/static/', ''),
+                    '../../../' + decodedLocalPath.replace('/static/', ''),
+                    './models/' + decodedLocalPath.split('/').pop(),
+                    './' + decodedLocalPath.split('/').pop()
+                );
+            }
+
+            const currentOrigin = window.location.origin;
+            paths.push(
+                currentOrigin + '/' + modelUrl.replace(/^\//, ''),
+                currentOrigin + '/static/' + modelUrl.split('/').pop()
+            );
+
+            return [...new Set(paths.filter(path => path && path.trim() !== ''))];
+        }
+        
+        function tryPathsSequentially(paths, index) {
+            if (index >= paths.length) {
+                onAllPathsFailed();
+                return;
+            }
+            
+            if (index >= MAX_LOAD_ATTEMPTS) {
+                showError(`模型加载失败，已尝试 ${MAX_LOAD_ATTEMPTS} 次`);
+                return;
+            }
+            
+            const url = paths[index];
+            
+            loadFromUrl(url, () => {
+                setTimeout(() => {
+                    tryPathsSequentially(paths, index + 1);
+                }, 1000);
+            });
+        }
+        
+        function loadFromUrl(url, onErrorCallback) {
+            updateLoadingText(`正在加载模型...`);
+            
+            const loader = new THREE.GLTFLoader();
+            const dracoLoader = new THREE.DRACOLoader();
+
+            dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/libs/draco/');
+            loader.setDRACOLoader(dracoLoader);
+
+            const timestamp = new Date().getTime();
+            const urlWithTimestamp = url.includes('?') 
+                ? `${url}&_=${timestamp}`
+                : `${url}?_=${timestamp}`;
+            
+            loader.load(
+                urlWithTimestamp,
+                (gltf) => {
+                    onModelLoaded(gltf, url);
+                },
+                (xhr) => {
+                    const percent = xhr.total > 0 
+                        ? (xhr.loaded / xhr.total * 100).toFixed(1)
+                        : 0;
+                    updateLoadingText(`加载中... ${percent}%`);
+                },
+                (error) => {
+                    console.error(`模型加载失败: `, error);
+                    
+                    if (onErrorCallback) {
+                        onErrorCallback();
+                    } else {
+                        showError(`加载失败: ${error.message || '未知错误'}`);
+                    }
+                }
+            );
+        }
+        
+        function onModelLoaded(gltf, sourceUrl) {
+            isLoading = false;
+            
+            // 清理之前的模型
+            if (model) {
+                scene.remove(model);
+                disposeModel(model);
+            }
+            
+            model = gltf.scene;
+            scene.add(model);
+            autoAdjustModel(model);
+            setupModelShadows(model);
+            setupAnimations(gltf);
+            document.getElementById('loading').style.display = 'none';
+
+            if (statusNotifier) {
+                statusNotifier.showSuccess('3D模型加载完成！');
+            }
+            initDustCanvas();
+            
+            console.log('模型设置完成');
+        }
+        
+        function onAllPathsFailed() {
+            // 尝试加载一个在线的示例模型作为回退
+            console.log('所有本地路径失败，尝试加载在线示例模型...');
+            statusNotifier.showInfo('正在加载示例模型...', 3000);
+            const backupUrl = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/models/gltf/Duck/glTF/Duck.gltf';
+            loadFromUrl(backupUrl);
+        }
+        
+        // ==================== 模型处理函数 ====================
+        function autoAdjustModel(model) {
+			const box = new THREE.Box3().setFromObject(model);
+			const center = box.getCenter(new THREE.Vector3());
+			const size = box.getSize(new THREE.Vector3());
+			
+			const maxDim = Math.max(size.x, size.y, size.z);
+			const targetSize = 5;
+			const scale = targetSize / maxDim;
+			
+			model.scale.multiplyScalar(scale);
+			
+			model.position.sub(center.multiplyScalar(scale));
+			model.position.y = 0;
+			
+			controls.target.copy(center).multiplyScalar(scale);
+			controls.update();
+			
+			box.setFromObject(model);
+			const newCenter = box.getCenter(new THREE.Vector3());
+			const newSize = box.getSize(new THREE.Vector3());
+			
+			const distance = Math.max(newSize.x, newSize.y, newSize.z) * 1.8;
+			
+			camera.position.set(
+				newCenter.x,
+				newCenter.y + newSize.y * 0.4,
+				newCenter.z + distance
+			);
+			
+			controls.target.copy(newCenter);
+			controls.update();
+            
+            console.log(`模型调整: 缩放 ${scale.toFixed(2)}x, 尺寸 ${size.x.toFixed(2)}x${size.y.toFixed(2)}x${size.z.toFixed(2)}`);
+        }
+        
+        function setupModelShadows(model) {
+            model.traverse((child) => {
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+
+                    if (child.material) {
+
+                        child.material.side = THREE.DoubleSide;
+                        child.material.needsUpdate = true;
+
+                        if (!child.material.emissive) {
+                            child.material.emissive = new THREE.Color(0x000000);
+                        }
+                    }
+                }
+            });
+        }
+        
+        function setupAnimations(gltf) {
+            if (gltf.animations && gltf.animations.length > 0) {
+                mixer = new THREE.AnimationMixer(model);
+
+                const action = mixer.clipAction(gltf.animations[0]);
+                action.play();
+                
+                console.log(`已加载 ${gltf.animations.length} 个动画`);
+            }
+        }
+        
+        function disposeModel(model) {
+            model.traverse((child) => {
+                if (child.isMesh) {
+                    if (child.geometry) {
+                        child.geometry.dispose();
+                    }
+                    if (child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach(material => material.dispose());
+                        } else {
+                            child.material.dispose();
+                        }
+                    }
+                }
+            });
+        }
+        
+        // ==================== 工具函数 ====================
+        function isWebGLAvailable() {
+            try {
+                const canvas = document.createElement('canvas');
+                return !!(window.WebGLRenderingContext && 
+                    (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')));
+            } catch (e) {
+                return false;
+            }
+        }
+        
+        function updateLoadingText(text) {
+            const textDiv = document.getElementById('loading-text');
+            if (textDiv) {
+                textDiv.textContent = text;
+            }
+        }
+        
+        function showError(message) {
+            console.error('显示错误:', message);
+            
+            const loadingDiv = document.getElementById('loading');
+            const errorDiv = document.getElementById('error');
+            
+            if (loadingDiv) loadingDiv.style.display = 'none';
+            if (errorDiv) {
+                document.getElementById('error-text').textContent = message;
+                errorDiv.style.display = 'block';
+            }
+            
+            // 显示错误通知
+            if (statusNotifier) {
+                statusNotifier.showError(`模型加载失败: ${message}`);
+            }
+        }
+        
+        function retryLoad() {
+            const errorDiv = document.getElementById('error');
+            if (errorDiv) errorDiv.style.display = 'none';
+            
+            document.getElementById('loading').style.display = 'flex';
+            loadModel();
+        }
+        
+        // ==================== 控制函数 ====================
+        function setBrightness(value) {
+            Config.brightness = Math.max(0.1, Math.min(20, value));
+            
+            scene.traverse((object) => {
+                if (object.isLight) {
+                    if (object.type === 'AmbientLight') {
+                        object.intensity = Config.brightness * 0.1;
+                    } else if (object.type === 'DirectionalLight') {
+                        object.intensity = Config.brightness * 0.5;
+                    }
+                }
+            });
+            
+            // 保存到存储
+            saveToStorage('brightness', Config.brightness);
+            
+            console.log(`亮度设置为: ${Config.brightness}`);
+        }
+        
+        function resetView() {
+            if (controls) {
+                controls.reset();
+                camera.position.set(5, 5, 5);
+                controls.update();
+                if (statusNotifier) {
+                    statusNotifier.showInfo('视图已重置');
+                }
+            }
+        }
+        
+        // ==================== 尘埃效果系统 ====================
+        function initDustCanvas() {
+            const layer = document.getElementById('dust-layer');
+            if (!layer) { 
+                setTimeout(() => initDustCanvas(), 100); 
+                return; 
+            }
+            
+            // 清理现有内容
+            layer.innerHTML = '';
+            
+            const container = document.getElementById('canvas') || layer;
+            const w = container.offsetWidth || 400;
+            const h = container.offsetHeight || 400;
+            
+            const canvas = document.createElement('canvas');
+            canvas.width = w; 
+            canvas.height = h;
+            canvas.style.cssText = `
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                cursor: crosshair;
+                display: block;
+                touch-action: none;
+                z-index: 3;  // 确保在3D画布之上
+            `;
+            layer.appendChild(canvas);
+            
+            dustCanvas = canvas;
+            dustCtx = canvas.getContext('2d');
+            dustFullyCleared = false; 
+            dustProgress = 0; 
+            _dustLastCheck = 0;
+            
+            // 绘制尘埃
+            drawDust(w, h);
+            
+            // 确保层可见且可交互
+            layer.style.pointerEvents = 'auto';
+            layer.style.zIndex = '3';
+
+            if (dustShowIntro) {
+                document.getElementById('dust-intro-mask').style.display = 'flex';
+            }
+
+            bindDustEvents(canvas);
+        }
+
+        function bindDustEvents(canvas) {
+            // 鼠标事件
+            canvas.addEventListener('mousedown', handleDustStart);
+            canvas.addEventListener('mousemove', handleDustMove);
+            canvas.addEventListener('mouseup', handleDustEnd);
+            canvas.addEventListener('mouseleave', handleDustEnd);
+            
+            // 触摸事件
+            canvas.addEventListener('touchstart', handleDustStart, { passive: false });
+            canvas.addEventListener('touchmove', handleDustMove, { passive: false });
+            canvas.addEventListener('touchend', handleDustEnd);
+            
+            console.log('尘埃事件绑定完成');
+        }
+
+        function handleDustStart(e) {
+            dustBrushing = true;
+            if (e.type === 'touchstart') {
+                e.preventDefault();
+                if (e.touches[0]) eraseDust(e.touches[0], true);
+            } else {
+                eraseDust(e);
+            }
+        }
+        
+        function handleDustMove(e) {
+            if (!dustBrushing) return;
+            if (e.type === 'touchmove') {
+                e.preventDefault();
+                if (e.touches[0]) eraseDust(e.touches[0], true);
+            } else {
+                eraseDust(e);
+            }
+        }
+        
+        function handleDustEnd() {
+            dustBrushing = false;
+        }
+        
+        function startDustBrush() { 
+            dustShowIntro = false;
+            document.getElementById('dust-intro-mask').style.display = 'none';
+            document.getElementById('dust-bar-wrap').style.display = 'block';
+        }
+        
+        function drawDust(w, h) {
+            const ctx = dustCtx;
+            if (!ctx) return;
+            
+            ctx.clearRect(0, 0, w, h);
+            const cx = w / 2, cy = h / 2;
+            const rx = w * 0.42, ry = h * 0.46;
+            
+            ctx.save();
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.fillStyle = 'rgba(28, 22, 16, 0.97)';
+            ctx.fillRect(0, 0, w, h);
+            
+            const imgData = ctx.getImageData(0, 0, w, h);
+            const d = imgData.data;
+            for (let i = 0; i < d.length; i += 4) {
+                if (d[i+3] < 10) continue;
+                const rnd = Math.random();
+                if (rnd > 0.6) { 
+                    const v = Math.floor(Math.random() * 80 + 100); 
+                    d[i]=v; 
+                    d[i+1]=Math.floor(v*0.85); 
+                    d[i+2]=Math.floor(v*0.6); 
+                    d[i+3]=Math.floor(Math.random()*120+40); 
+                } else if (rnd > 0.3) { 
+                    const v = Math.floor(Math.random() * 40 + 30); 
+                    d[i]=Math.floor(v*1.1); 
+                    d[i+1]=Math.floor(v*0.95); 
+                    d[i+2]=Math.floor(v*0.75); 
+                    d[i+3]=Math.floor(Math.random()*160+60); 
+                } else { 
+                    d[i]=Math.floor(Math.random()*18+8); 
+                    d[i+1]=Math.floor(Math.random()*14+6); 
+                    d[i+2]=Math.floor(Math.random()*10+4); 
+                    d[i+3]=Math.floor(Math.random()*200+55); 
+                }
+            }
+            
+            ctx.putImageData(imgData, 0, 0);
+            for (let y = 0; y < h; y += 2) { 
+                const alpha = 0.04 + Math.random() * 0.06; 
+                ctx.fillStyle = `rgba(${Math.random()>0.5?'200,170,110':'40,30,20'},${alpha})`; 
+                ctx.fillRect(0, y, w, 1); 
+            }
+            
+            for (let k = 0; k < 60; k++) { 
+                const px=Math.random()*w, py=Math.random()*h, pr=Math.random()*1.5+0.5, br=Math.random()*0.6+0.3; 
+                ctx.beginPath(); 
+                ctx.arc(px,py,pr,0,Math.PI*2); 
+                ctx.fillStyle=`rgba(${Math.floor(200*br)},${Math.floor(160*br)},${Math.floor(80*br)},${Math.random()*0.6+0.3})`; 
+                ctx.fill(); 
+            }
+            
+            const edgeGrd = ctx.createRadialGradient(cx,cy,Math.min(rx,ry)*0.72,cx,cy,Math.max(rx,ry));
+            edgeGrd.addColorStop(0,'rgba(0,0,0,0)'); 
+            edgeGrd.addColorStop(1,'rgba(0,0,0,0.9)');
+            ctx.globalCompositeOperation = 'destination-out'; 
+            ctx.fillStyle = edgeGrd; 
+            ctx.fillRect(0,0,w,h);
+            
+            ctx.globalCompositeOperation = 'source-over';
+            const warmGrd = ctx.createRadialGradient(cx,cy,0,cx,cy,Math.min(w,h)*0.3);
+            warmGrd.addColorStop(0,'rgba(200,150,80,0.07)'); 
+            warmGrd.addColorStop(1,'rgba(0,0,0,0)');
+            ctx.fillStyle = warmGrd; 
+            ctx.fillRect(0,0,w,h);
+            ctx.restore();
+            _dustMask = { cx, cy, rx, ry };
+        }
+        
+        function getEventPos(e, canvas) { 
+            const rect = canvas.getBoundingClientRect(); 
+            return { 
+                x: e.clientX - rect.left, 
+                y: e.clientY - rect.top 
+            }; 
+        }
+        
+        function eraseDust(e, isTouch = false) {
+            const canvas = dustCanvas; 
+            const ctx = dustCtx;
+            if (!canvas || !ctx || dustFullyCleared) return;
+            
+            const pos = isTouch ? 
+                { 
+                    x: e.clientX - canvas.getBoundingClientRect().left, 
+                    y: e.clientY - canvas.getBoundingClientRect().top 
+                } : 
+                getEventPos(e, canvas);
+            
+            const radius = 38;
+            ctx.globalCompositeOperation = 'destination-out';
+            const grd = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, radius);
+            grd.addColorStop(0, 'rgba(0,0,0,1)'); 
+            grd.addColorStop(0.6, 'rgba(0,0,0,0.7)'); 
+            grd.addColorStop(1, 'rgba(0,0,0,0)');
+            
+            ctx.fillStyle = grd; 
+            ctx.beginPath(); 
+            ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2); 
+            ctx.fill();
+            ctx.globalCompositeOperation = 'source-over';
+            
+            playDustSound(); 
+            spawnDustParticles(pos.x, pos.y);
+            
+            if (!_dustLastCheck || Date.now() - _dustLastCheck > 120) { 
+                _dustLastCheck = Date.now(); 
+                calcDustProgress(); 
+            }
+        }
+        
+        function calcDustProgress() {
+            const ctx = dustCtx; 
+            const canvas = dustCanvas;
+            if (!ctx || !canvas) return;
+            
+            const w = canvas.width, h = canvas.height;
+            const sample = ctx.getImageData(0, 0, w, h); 
+            const d = sample.data;
+            const mask = _dustMask || { cx: w/2, cy: h/2, rx: w*0.42, ry: h*0.46 };
+            
+            let transparent = 0, total = 0;
+            const step = 6;
+            
+            for (let py = 0; py < h; py += step) {
+                for (let px = 0; px < w; px += step) {
+                    const dx = (px - mask.cx) / mask.rx; 
+                    const dy = (py - mask.cy) / mask.ry;
+                    if (dx*dx + dy*dy > 1) continue;
+                    const i = (py * w + px) * 4 + 3;
+                    if (d[i] < 30) transparent++;
+                    total++;
+                }
+            }
+            
+            dustProgress = total > 0 ? Math.min(100, (transparent / total) * 100) : 0;
+
+            document.getElementById('dust-bar-fill').style.width = dustProgress + '%';
+            
+            if (dustProgress >= 80) {
+                dustFullyCleared = true; 
+                playRevealSound();
+
+                const dustBar = document.getElementById('dust-bar-wrap');
+                if (dustBar) {
+                    dustBar.style.transition = 'opacity 0.5s ease';
+                    dustBar.style.opacity = '0';
+                    setTimeout(() => {
+                        dustBar.style.display = 'none';
+                    }, 500);
+                }
+                
+                setTimeout(() => { 
+                    dustShowReveal = true;
+                    document.getElementById('dust-reveal-mask').style.display = 'flex';
+                }, 400);
+                
+                const layer = document.getElementById('dust-layer');
+                if (layer) {
+                    layer.style.pointerEvents = 'none';
+                    if (dustCanvas) { 
+                        dustCanvas.style.transition = 'opacity 0.8s ease'; 
+                        dustCanvas.style.opacity = '0'; 
+                    }
+                }
+            }
+        }
+        
+        function playDustSound() {
+            try {
+                if (!dustAudioCtx) dustAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const ctx = dustAudioCtx;
+                const buf = ctx.createBuffer(1, ctx.sampleRate * 0.04, ctx.sampleRate);
+                const data = buf.getChannelData(0);
+                for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length) * 0.12;
+                const src = ctx.createBufferSource(); src.buffer = buf;
+                const gain = ctx.createGain(); gain.gain.value = 0.25;
+                src.connect(gain); gain.connect(ctx.destination); src.start();
+            } catch(e) {}
+        }
+        
+        function playRevealSound() {
+            try {
+                if (!dustAudioCtx) dustAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const ctx = dustAudioCtx;
+                const osc = ctx.createOscillator(); 
+                const gain = ctx.createGain();
+                osc.connect(gain); gain.connect(ctx.destination);
+                osc.frequency.setValueAtTime(320, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(680, ctx.currentTime + 0.4);
+                gain.gain.setValueAtTime(0.18, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+                osc.start(); 
+                osc.stop(ctx.currentTime + 0.5);
+            } catch(e) {}
+        }
+        
+        function spawnDustParticles(x, y) {
+            const container = document.getElementById('dust-particles');
+            if (!container) return;
+            
+            const count = Math.floor(Math.random() * 4 + 2);
+            for (let i = 0; i < count; i++) {
+                const p = document.createElement('div');
+                const angle = Math.random() * Math.PI * 2;
+                const dist = Math.random() * 30 + 8;
+                const size = Math.random() * 3 + 1;
+                const duration = Math.random() * 400 + 300;
+                const hue = 180 + Math.random() * 60;
+                
+                p.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${size}px;height:${size}px;border-radius:50%;background:hsl(${hue},80%,70%);box-shadow:0 0 ${size*2}px hsl(${hue},80%,70%);pointer-events:none;transform:translate(-50%,-50%);transition:transform ${duration}ms ease-out,opacity ${duration}ms ease-out;`;
+                container.appendChild(p);
+                
+                requestAnimationFrame(() => { 
+                    p.style.transform = `translate(calc(-50% + ${Math.cos(angle)*dist}px),calc(-50% + ${Math.sin(angle)*dist}px))`; 
+                    p.style.opacity = '0'; 
+                });
+                
+                setTimeout(() => { 
+                    if (p.parentNode) p.parentNode.removeChild(p); 
+                }, duration + 50);
+            }
+        }
+        
+        function closeDustReveal() {
+            dustShowReveal = false;
+            document.getElementById('dust-reveal-mask').style.display = 'none';
+        }
+        
+        // ==================== 事件监听 ====================
+        function setupEventListeners() {
+            window.addEventListener('resize', onWindowResize);
+            
+            // 点击背景面板外部关闭面板
+            document.getElementById('bg-panel-mask').addEventListener('click', function(e) {
+                if (e.target === this) {
+                    closeBgPanel();
+                }
+            });
+            
+            console.log('事件监听器设置完成');
+        }
+        
+        function onWindowResize() {
+            const container = document.getElementById('container');
+            
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            
+            console.log('窗口大小调整:', container.clientWidth, 'x', container.clientHeight);
+        }
+        
+        // ==================== 动画循环 ====================
+        function animate(currentTime) {
+            requestAnimationFrame(animate);
+            
+            // 计算 FPS
+            frameCount++;
+            if (currentTime - fpsTimer >= 1000) {
+                fps = (frameCount * 1000) / (currentTime - fpsTimer);
+                frameCount = 0;
+                fpsTimer = currentTime;
+            }
+            
+            // 限制帧率
+            if (Config.maxFPS > 0) {
+                const delta = currentTime - lastFrameTime;
+                const interval = 1000 / Config.maxFPS;
+                
+                if (delta < interval) {
+                    return;
+                }
+                
+                lastFrameTime = currentTime - (delta % interval);
+            }
+            
+            // 更新动画混合器
+            if (mixer) {
+                const delta = clock.getDelta();
+                mixer.update(delta);
+            }
+            
+            // 更新控制器
+            if (controls) {
+                controls.update();
+            }
+            
+            // 渲染场景
+            if (renderer && scene && camera) {
+                renderer.render(scene, camera);
+            }
+        }
+        
+        // ==================== 初始化调用 ====================
+        // 页面加载完成后初始化
+        window.addEventListener('DOMContentLoaded', () => {
+            console.log('页面加载完成，开始初始化 3D 查看器');
+            try {
+                init();
+            } catch (error) {
+                console.error('初始化过程中发生错误:', error);
+                showError(`初始化错误: ${error.message}`);
+            }
+        });
+        
+        // 页面卸载时清理资源
+        window.addEventListener('beforeunload', () => {
+            if (renderer) {
+                renderer.dispose();
+            }
+            if (controls) {
+                controls.dispose();
+            }
+            if (model) {
+                disposeModel(model);
+            }
+            
+            // 停止摄像头
+            stopCamera();
+            
+            // 清理纹理
+            if (currentTexture) {
+                currentTexture.dispose();
+            }
+            
+            console.log('3D 查看器资源已清理');
+        });
+    </script>
+</body>
+</html>

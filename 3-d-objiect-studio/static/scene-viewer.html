@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>3D 数字展馆</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #e8ded0; touch-action: none; }
+        #canvas-container { width: 100%; height: 100%; display: block; }
+        .toast {
+            position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.7); color: #fff; padding: 8px 20px;
+            border-radius: 20px; font-size: 14px; z-index: 999; pointer-events: none;
+            transition: opacity 0.3s; opacity: 0;
+        }
+        .toast.show { opacity: 1; }
+        .loading {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            font-family: Georgia, serif; color: #5a4a3a; font-size: 16px; z-index: 1000;
+            background: rgba(255,255,255,0.8); padding: 12px 24px; border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="toast" class="toast"></div>
+    <div id="loading" class="loading">场景加载中…</div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.152.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.152.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        // ---------- 工具函数 ----------
+        function showToast(msg, duration = 1500) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), duration);
+        }
+        function hideLoading() {
+            const el = document.getElementById('loading');
+            if (el) el.style.display = 'none';
+        }
+
+        // ---------- URL 参数解析 ----------
+        function parseQuery() {
+            const raw = window.location.search.substring(1);
+            if (!raw) return {};
+            const pairs = raw.split('&');
+            const res = {};
+            for (const pair of pairs) {
+                const eqIndex = pair.indexOf('=');
+                if (eqIndex !== -1) {
+                    const k = decodeURIComponent(pair.substring(0, eqIndex));
+                    const v = decodeURIComponent(pair.substring(eqIndex + 1));
+                    res[k] = v;
+                }
+            }
+            return res;
+        }
+
+        function getInitialData() {
+            const q = parseQuery();
+            let room = null, placed = [], models = [];
+            try {
+                if (q.room) room = JSON.parse(q.room);
+                if (q.placed) placed = JSON.parse(q.placed);
+                if (q.models) models = JSON.parse(q.models);
+            } catch (e) {
+                console.error('参数解析失败', e);
+            }
+            models = models.map(m => ({
+                ...m,
+                modelUrl: makeAbsoluteUrl(m.modelUrl),
+                glbUrl: makeAbsoluteUrl(m.glbUrl)
+            }));
+            return { room, placed, models };
+        }
+
+        function makeAbsoluteUrl(url) {
+            if (!url || typeof url !== 'string') return '';
+            if (/^https?:\/\//i.test(url)) return url;
+            if (url.startsWith('/')) return window.location.origin + url;
+            return window.location.origin + '/' + url;
+        }
+
+        // ---------- 全局状态 ----------
+        const initialData = getInitialData();
+        let roomConfig = initialData.room || {
+            id: 'medium', name: '雅致中厅', shape: 'shape-bed',
+            lenM: 6, widM: 4, heightM: 3.2, kind: 'flat', eaveM: null
+        };
+        let placedItems = initialData.placed || [];
+        let availableModels = initialData.models || [];
+        let activeModel = null;
+        let itemLoadVersion = 0;
+
+        let scene, camera, renderer, controls;
+        let roomGroup, itemsGroup;
+        let floorMesh = null;
+        let walls = [];
+        let raycaster, pointer;
+        let animationFrameId = 0;
+        let dragState = null;
+        let suppressNextPlacement = false;
+
+        // ---------- 初始化场景（灯光、控制器等） ----------
+        function initScene() {
+            const container = document.getElementById('canvas-container');
+            const w = container.clientWidth;
+            const h = container.clientHeight;
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xe8ded0);
+            scene.fog = new THREE.Fog(0xe8ded0, 18, 46);
+
+            camera = new THREE.PerspectiveCamera(48, w / h, 0.1, 200);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setSize(w, h);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+            container.innerHTML = '';
+            container.appendChild(renderer.domElement);
+
+            const hemi = new THREE.HemisphereLight(0xfff7e6, 0x7a6a55, 0.85);
+            scene.add(hemi);
+            const dir = new THREE.DirectionalLight(0xfff2d8, 1.1);
+            dir.position.set(6, 12, 8);
+            dir.castShadow = true;
+            dir.shadow.mapSize.set(1024, 1024);
+            dir.shadow.camera.left = -15;
+            dir.shadow.camera.right = 15;
+            dir.shadow.camera.top = 15;
+            dir.shadow.camera.bottom = -15;
+            scene.add(dir);
+            const fill = new THREE.DirectionalLight(0xfffbe8, 0.25);
+            fill.position.set(-6, 6, -4);
+            scene.add(fill);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.08;
+            controls.minDistance = 3;
+            controls.maxDistance = 30;
+            controls.maxPolarAngle = Math.PI * 0.49;
+            controls.minPolarAngle = Math.PI * 0.08;
+            controls.target.set(0, 0.8, 0);
+
+            roomGroup = new THREE.Group();
+            scene.add(roomGroup);
+            itemsGroup = new THREE.Group();
+            scene.add(itemsGroup);
+
+            raycaster = new THREE.Raycaster();
+            pointer = new THREE.Vector2();
+
+            window.addEventListener('resize', onWindowResize);
+            renderer.domElement.addEventListener('pointerdown', onPointerDown);
+            renderer.domElement.addEventListener('pointermove', onPointerMove);
+            renderer.domElement.addEventListener('pointerup', onPointerUp);
+            renderer.domElement.addEventListener('pointercancel', onPointerUp);
+            renderer.domElement.addEventListener('click', onCanvasClick);
+            renderer.domElement.addEventListener('touchend', onCanvasTouchEnd, { passive: false });
+            window.addEventListener('message', onParentMessage);
+
+            buildRoom();
+            refreshItems();
+            resetCamera();
+            animate();
+            hideLoading();
+        }
+
+        function onWindowResize() {
+            const container = document.getElementById('canvas-container');
+            if (!container) return;
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        function animate() {
+            animationFrameId = requestAnimationFrame(animate);
+            if (controls) controls.update();
+            updateWallVisibility();
+            renderer.render(scene, camera);
+        }
+		
+        function buildRoom() {
+            while (roomGroup.children.length) disposeObject(roomGroup.children.pop());
+            walls = [];
+            floorMesh = null;
+
+            const { id, lenM, widM, heightM, kind, eaveM } = roomConfig;
+            switch (id) {
+                case 'small': buildCozyCabin(lenM, widM, heightM); break;
+                case 'medium': buildElegantHall(lenM, widM, heightM); break;
+                case 'large': buildGrandPalace(lenM, widM, heightM); break;
+                case 'studio': buildLoftStudio(lenM, widM, heightM, eaveM || 2.5); break;
+                case 'garden': buildGardenCourtyard(lenM, widM, heightM); break;
+                case 'vault': buildDomeMuseum(lenM, widM, heightM); break;
+                default: buildStandardRoom(lenM, widM, heightM);
+            }
+        }
+
+        // 玲珑小阁（温馨木屋）
+        function buildCozyCabin(L, W, H) {
+            const halfL = L / 2, halfW = W / 2;
+            // 地板
+            const floorGeo = new THREE.PlaneGeometry(L, W);
+            const floorTex = makeWoodFloorTexture(L, W);
+            floorMesh = new THREE.Mesh(floorGeo, new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.8, metalness: 0.05 }));
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.receiveShadow = true;
+            floorMesh.name = 'floor';
+            roomGroup.add(floorMesh);
+
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0xf5e6c8, roughness: 0.95, side: THREE.DoubleSide, transparent: true, opacity: 1 });
+            const configs = [
+                { pos: [0, H / 2, -halfW], rot: 0, w: L, h: H, normal: [0, 0, -1] },
+                { pos: [0, H / 2, halfW], rot: Math.PI, w: L, h: H, normal: [0, 0, 1] },
+                { pos: [-halfL, H / 2, 0], rot: Math.PI / 2, w: W, h: H, normal: [-1, 0, 0] },
+                { pos: [halfL, H / 2, 0], rot: -Math.PI / 2, w: W, h: H, normal: [1, 0, 0] }
+            ];
+            configs.forEach(cfg => {
+                const wall = new THREE.Mesh(new THREE.PlaneGeometry(cfg.w, cfg.h), wallMat.clone());
+                wall.position.set(...cfg.pos);
+                wall.rotation.y = cfg.rot;
+                wall.receiveShadow = true;
+                wall.userData.outwardNormal = new THREE.Vector3(...cfg.normal);
+                roomGroup.add(wall);
+                walls.push(wall);
+            });
+
+            // 天花板
+            const ceil = new THREE.Mesh(new THREE.PlaneGeometry(L, W), new THREE.MeshStandardMaterial({ color: 0xfff8e8, roughness: 0.95, side: THREE.DoubleSide }));
+            ceil.rotation.x = Math.PI / 2;
+            ceil.position.y = H;
+            roomGroup.add(ceil);
+
+            // 壁炉 + 火焰装饰
+            const fireplace = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.6, 0.3), new THREE.MeshStandardMaterial({ color: 0x8b4513, roughness: 0.7 }));
+            fireplace.position.set(-halfL + 0.5, 0.3, -halfW + 0.3);
+            fireplace.castShadow = true;
+            roomGroup.add(fireplace);
+            const flame = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.3, 8), new THREE.MeshBasicMaterial({ color: 0xff6600, transparent: true, opacity: 0.8 }));
+            flame.position.set(-halfL + 0.5, 0.5, -halfW + 0.25);
+            roomGroup.add(flame);
+            const fireLight = new THREE.PointLight(0xff6633, 1, 5);
+            fireLight.position.set(-halfL + 0.5, 0.8, -halfW + 0.5);
+            roomGroup.add(fireLight);
+
+            // 窗帘
+            const curtainMat = new THREE.MeshStandardMaterial({ color: 0xc9a86c, roughness: 0.9, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
+            [-halfL + 0.1, halfL - 0.1].forEach(x => {
+                const curtain = new THREE.Mesh(new THREE.PlaneGeometry(0.4, H * 0.6), curtainMat);
+                curtain.position.set(x, H * 0.7, halfW - 0.1);
+                curtain.rotation.y = Math.PI;
+                roomGroup.add(curtain);
+            });
+        }
+
+        // 雅致中厅
+        function buildElegantHall(L, W, H) {
+            const halfL = L / 2, halfW = W / 2;
+            floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(L, W), new THREE.MeshStandardMaterial({ color: 0xe8e4df, roughness: 0.3, metalness: 0.2 }));
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.receiveShadow = true;
+            floorMesh.name = 'floor';
+            roomGroup.add(floorMesh);
+
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0xfaf8f5, roughness: 0.85, side: THREE.DoubleSide, transparent: true, opacity: 1 });
+            const configs = [
+                { pos: [0, H / 2, -halfW], rot: 0, w: L, h: H, normal: [0, 0, -1] },
+                { pos: [0, H / 2, halfW], rot: Math.PI, w: L, h: H, normal: [0, 0, 1] },
+                { pos: [-halfL, H / 2, 0], rot: Math.PI / 2, w: W, h: H, normal: [-1, 0, 0] },
+                { pos: [halfL, H / 2, 0], rot: -Math.PI / 2, w: W, h: H, normal: [1, 0, 0] }
+            ];
+            configs.forEach((cfg, i) => {
+                const wall = new THREE.Mesh(new THREE.PlaneGeometry(cfg.w, cfg.h), wallMat.clone());
+                wall.position.set(...cfg.pos);
+                wall.rotation.y = cfg.rot;
+                wall.receiveShadow = true;
+                wall.userData.outwardNormal = new THREE.Vector3(...cfg.normal);
+                roomGroup.add(wall);
+                walls.push(wall);
+
+                if (i === 0 || i === 1) { // 前后两面墙上加画框
+                    const frame = new THREE.Mesh(new THREE.BoxGeometry(cfg.w * 0.3, H * 0.3, 0.05), new THREE.MeshStandardMaterial({ color: 0x2a1810, roughness: 0.6 }));
+                    frame.position.set(0, H * 0.6, cfg.pos[2] + (i === 0 ? 0.05 : -0.05));
+                    roomGroup.add(frame);
+                }
+            });
+
+            const ceil = new THREE.Mesh(new THREE.PlaneGeometry(L, W), new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.9, side: THREE.DoubleSide }));
+            ceil.rotation.x = Math.PI / 2;
+            ceil.position.y = H;
+            roomGroup.add(ceil);
+
+            // 吊灯
+            const lampGroup = new THREE.Group();
+            const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.5, 8), new THREE.MeshStandardMaterial({ color: 0xc9b896, metalness: 0.8 }));
+            pole.position.y = H - 0.25;
+            lampGroup.add(pole);
+            const shade = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.3, 8), new THREE.MeshStandardMaterial({ color: 0xf5f0e0, roughness: 0.5, side: THREE.DoubleSide, emissive: 0xfff5e0, emissiveIntensity: 0.3 }));
+            shade.position.y = H - 0.6;
+            lampGroup.add(shade);
+            roomGroup.add(lampGroup);
+
+            // 踢脚线
+            const baseboardMat = new THREE.MeshStandardMaterial({ color: 0xd4c4a8, roughness: 0.6 });
+            configs.forEach(cfg => {
+                const baseboard = new THREE.Mesh(new THREE.BoxGeometry(cfg.w, 0.1, 0.05), baseboardMat);
+                baseboard.position.set(cfg.pos[0], 0.05, cfg.pos[2] + (cfg.rot === 0 ? -0.05 : cfg.rot === Math.PI ? 0.05 : cfg.pos[0] < 0 ? 0.05 : -0.05));
+                if (cfg.rot !== 0) baseboard.rotation.y = cfg.rot;
+                roomGroup.add(baseboard);
+            });
+        }
+
+        // 恢宏大厅（柱子 + 金线 + 大吊灯）
+        function buildGrandPalace(L, W, H) {
+            const halfL = L / 2, halfW = W / 2;
+            floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(L, W), new THREE.MeshStandardMaterial({ color: 0xd8d0c8, roughness: 0.25, metalness: 0.3 }));
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.receiveShadow = true;
+            floorMesh.name = 'floor';
+            roomGroup.add(floorMesh);
+
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0xf8f4ee, roughness: 0.8, side: THREE.DoubleSide, transparent: true, opacity: 1 });
+            const goldLineMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.3 });
+            const configs = [
+                { pos: [0, H / 2, -halfW], rot: 0, w: L, h: H, normal: [0, 0, -1] },
+                { pos: [0, H / 2, halfW], rot: Math.PI, w: L, h: H, normal: [0, 0, 1] },
+                { pos: [-halfL, H / 2, 0], rot: Math.PI / 2, w: W, h: H, normal: [-1, 0, 0] },
+                { pos: [halfL, H / 2, 0], rot: -Math.PI / 2, w: W, h: H, normal: [1, 0, 0] }
+            ];
+            configs.forEach(cfg => {
+                const wall = new THREE.Mesh(new THREE.PlaneGeometry(cfg.w, cfg.h), wallMat.clone());
+                wall.position.set(...cfg.pos);
+                wall.rotation.y = cfg.rot;
+                wall.receiveShadow = true;
+                wall.userData.outwardNormal = new THREE.Vector3(...cfg.normal);
+                roomGroup.add(wall);
+                walls.push(wall);
+
+                // 顶部 + 底部金线
+                const topLine = new THREE.Mesh(new THREE.BoxGeometry(cfg.w, 0.08, 0.08), goldLineMat);
+                topLine.position.set(cfg.pos[0], H - 0.04, cfg.pos[2]);
+                if (cfg.rot !== 0) topLine.rotation.y = cfg.rot;
+                roomGroup.add(topLine);
+                const bottomLine = new THREE.Mesh(new THREE.BoxGeometry(cfg.w, 0.08, 0.08), goldLineMat);
+                bottomLine.position.set(cfg.pos[0], 0.04, cfg.pos[2]);
+                if (cfg.rot !== 0) bottomLine.rotation.y = cfg.rot;
+                roomGroup.add(bottomLine);
+            });
+
+            const ceil = new THREE.Mesh(new THREE.PlaneGeometry(L, W), new THREE.MeshStandardMaterial({ color: 0xfaf8f5, roughness: 0.9, side: THREE.DoubleSide }));
+            ceil.rotation.x = Math.PI / 2;
+            ceil.position.y = H;
+            roomGroup.add(ceil);
+
+            // 柱子
+            const columnMat = new THREE.MeshStandardMaterial({ color: 0xf5f0e8, roughness: 0.4, metalness: 0.1 });
+            const columnPositions = [
+                [-halfL + 1, 0, -halfW + 1], [halfL - 1, 0, -halfW + 1],
+                [-halfL + 1, 0, halfW - 1], [halfL - 1, 0, halfW - 1],
+                [0, 0, -halfW + 1], [0, 0, halfW - 1]
+            ];
+            columnPositions.forEach(pos => {
+                const column = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.18, H * 0.85, 16), columnMat);
+                column.position.set(pos[0], H * 0.425, pos[2]);
+                column.castShadow = true;
+                roomGroup.add(column);
+                const capital = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.15, 0.4), columnMat);
+                capital.position.set(pos[0], H - 0.075, pos[2]);
+                roomGroup.add(capital);
+            });
+
+            // 华丽吊灯
+            const chandelierGroup = new THREE.Group();
+            const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.8, 8), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9 }));
+            chain.position.y = H - 0.4;
+            chandelierGroup.add(chain);
+            const body = new THREE.Mesh(new THREE.SphereGeometry(0.5, 16, 16), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.2 }));
+            body.position.y = H - 0.9;
+            body.scale.y = 0.6;
+            chandelierGroup.add(body);
+            roomGroup.add(chandelierGroup);
+            const light = new THREE.PointLight(0xfff5e0, 1.5, 15);
+            light.position.set(0, H - 1, 0);
+            roomGroup.add(light);
+        }
+
+        // 阁楼工作室（loft风格，夹层、管道、楼梯）
+        function buildLoftStudio(L, W, H, eave) {
+            const halfL = L / 2, halfW = W / 2;
+            const floorTex = makeIndustrialFloorTexture(L, W);
+            floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(L, W), new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.7, metalness: 0.2 }));
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.receiveShadow = true;
+            floorMesh.name = 'floor';
+            roomGroup.add(floorMesh);
+
+            const brickTex = makeBrickWallTexture(L, H);
+            const wallMat = new THREE.MeshStandardMaterial({ map: brickTex, roughness: 0.9, side: THREE.DoubleSide, transparent: true, opacity: 1 });
+            const configs = [
+                { pos: [0, H / 2, -halfW], rot: 0, w: L, h: H, normal: [0, 0, -1] },
+                { pos: [0, H / 2, halfW], rot: Math.PI, w: L, h: H, normal: [0, 0, 1] },
+                { pos: [-halfL, H / 2, 0], rot: Math.PI / 2, w: W, h: H, normal: [-1, 0, 0] },
+                { pos: [halfL, H / 2, 0], rot: -Math.PI / 2, w: W, h: H, normal: [1, 0, 0] }
+            ];
+            configs.forEach(cfg => {
+                const wall = new THREE.Mesh(new THREE.PlaneGeometry(cfg.w, cfg.h), wallMat.clone());
+                wall.position.set(...cfg.pos);
+                wall.rotation.y = cfg.rot;
+                wall.receiveShadow = true;
+                wall.userData.outwardNormal = new THREE.Vector3(...cfg.normal);
+                roomGroup.add(wall);
+                walls.push(wall);
+            });
+
+            // 管道
+            const pipeMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, metalness: 0.8, roughness: 0.4 });
+            [-halfW * 0.3, 0, halfW * 0.3].forEach(z => {
+                const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, L * 0.8, 8), pipeMat);
+                pipe.rotation.z = Math.PI / 2;
+                pipe.position.set(0, H - 0.2, z);
+                roomGroup.add(pipe);
+            });
+
+            // 夹层（透明玻璃地板）
+            const midFloor = new THREE.Mesh(new THREE.PlaneGeometry(L * 0.6, W * 0.6), new THREE.MeshStandardMaterial({ color: 0x88aacc, roughness: 0.1, metalness: 0.5, transparent: true, opacity: 0.4 }));
+            midFloor.rotation.x = -Math.PI / 2;
+            midFloor.position.y = H * 0.45;
+            roomGroup.add(midFloor);
+
+            // 栏杆
+            const railingMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.9, transparent: true, opacity: 0.8 });
+            const railPositions = [
+                { pos: [-L * 0.3, H * 0.45, 0], rot: 0, len: W * 0.6 },
+                { pos: [L * 0.3, H * 0.45, 0], rot: 0, len: W * 0.6 },
+                { pos: [0, H * 0.45, -W * 0.02], rot: Math.PI / 2, len: L * 0.6 },
+                { pos: [0, H * 0.45, W * 0.02], rot: Math.PI / 2, len: L * 0.6 }
+            ];
+            railPositions.forEach(rail => {
+                const railing = new THREE.Mesh(new THREE.BoxGeometry(rail.len, 0.8, 0.02), railingMat);
+                railing.position.set(rail.pos[0], rail.pos[1], rail.pos[2]);
+                railing.rotation.y = rail.rot;
+                roomGroup.add(railing);
+            });
+
+            // 吊灯
+            const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, H * 0.4, 8), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+            cord.position.y = H - H * 0.2;
+            roomGroup.add(cord);
+            const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffffaa }));
+            bulb.position.y = H - H * 0.4;
+            roomGroup.add(bulb);
+            const bulbLight = new THREE.PointLight(0xffffcc, 1, 8);
+            bulbLight.position.set(0, H - 0.5, 0);
+            roomGroup.add(bulbLight);
+
+            // 楼梯
+            const stairGroup = new THREE.Group();
+            const steps = 8;
+            for (let i = 0; i < steps; i++) {
+                const step = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.05, 0.25), new THREE.MeshStandardMaterial({ color: 0x555555, metalness: 0.6, roughness: 0.5 }));
+                step.position.set(halfL - 0.5, (i + 1) * H * 0.5 / steps, halfW - 0.5 - i * 0.15);
+                step.castShadow = true;
+                stairGroup.add(step);
+            }
+            roomGroup.add(stairGroup);
+        }
+
+        // 庭院展厅
+        function buildGardenCourtyard(L, W, H) {
+            const halfL = L / 2, halfW = W / 2;
+            const grassTex = makeGrassTexture(L, W);
+            floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(L, W), new THREE.MeshStandardMaterial({ map: grassTex, roughness: 0.95, metalness: 0 }));
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.receiveShadow = true;
+            floorMesh.name = 'floor';
+            roomGroup.add(floorMesh);
+
+            // 栅栏 + 透明墙壁
+            const fenceMat = new THREE.MeshStandardMaterial({ color: 0x8b7355, roughness: 0.85 });
+            const fenceHeight = H * 0.6;
+            const fenceConfigs = [
+                { pos: [0, fenceHeight / 2, -halfW], rot: 0, len: L },
+                { pos: [0, fenceHeight / 2, halfW], rot: 0, len: L },
+                { pos: [-halfL, fenceHeight / 2, 0], rot: Math.PI / 2, len: W },
+                { pos: [halfL, fenceHeight / 2, 0], rot: Math.PI / 2, len: W }
+            ];
+            fenceConfigs.forEach((cfg, i) => {
+                // 上下横梁
+                [-0.05, fenceHeight - 0.05].forEach(yOff => {
+                    const beam = new THREE.Mesh(new THREE.BoxGeometry(cfg.len, 0.1, 0.1), fenceMat);
+                    beam.position.set(cfg.pos[0], yOff, cfg.pos[2]);
+                    if (cfg.rot !== 0) beam.rotation.y = cfg.rot;
+                    roomGroup.add(beam);
+                });
+                // 竖杆
+                const plankCount = Math.floor(cfg.len / 0.15);
+                for (let j = 0; j < plankCount; j++) {
+                    const plank = new THREE.Mesh(new THREE.BoxGeometry(0.08, fenceHeight - 0.2, 0.02), fenceMat);
+                    const offset = (j - plankCount / 2) * 0.12;
+                    if (cfg.rot === 0) {
+                        plank.position.set(cfg.pos[0] + offset, fenceHeight / 2, cfg.pos[2]);
+                    } else {
+                        plank.position.set(cfg.pos[0], fenceHeight / 2, cfg.pos[2] + offset);
+                        plank.rotation.y = cfg.rot;
+                    }
+                    roomGroup.add(plank);
+                }
+                // 半透明墙壁
+                const wall = new THREE.Mesh(new THREE.PlaneGeometry(cfg.len, fenceHeight), new THREE.MeshStandardMaterial({ color: 0xf5f0e0, roughness: 0.9, side: THREE.DoubleSide, transparent: true, opacity: 0.3 }));
+                wall.position.set(...cfg.pos);
+                wall.rotation.y = cfg.rot;
+                wall.userData.outwardNormal = new THREE.Vector3(...[ [0,0,-1],[0,0,1],[-1,0,0],[1,0,0] ][i]);
+                roomGroup.add(wall);
+                walls.push(wall);
+            });
+
+            // 植物
+            const plantPositions = [
+                [-halfL + 0.5, -halfW + 0.5], [halfL - 0.5, -halfW + 0.5],
+                [-halfL + 0.5, halfW - 0.5], [halfL - 0.5, halfW - 0.5],
+                [-halfL + 0.5, 0], [halfL - 0.5, 0]
+            ];
+            plantPositions.forEach(pos => {
+                const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.2, 0.35, 12), new THREE.MeshStandardMaterial({ color: 0x8b4513, roughness: 0.8 }));
+                pot.position.set(pos[0], 0.175, pos[1]);
+                pot.castShadow = true;
+                roomGroup.add(pot);
+                const leafMat = new THREE.MeshStandardMaterial({ color: 0x3d7a2a, roughness: 0.8 });
+                for (let i = 0; i < 3; i++) {
+                    const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.2 + Math.random() * 0.15, 8, 8), leafMat);
+                    leaf.position.set(pos[0] + (Math.random() - 0.5) * 0.2, 0.35 + 0.2 * i + Math.random() * 0.1, pos[1] + (Math.random() - 0.5) * 0.2);
+                    leaf.scale.y = 1.3;
+                    leaf.castShadow = true;
+                    roomGroup.add(leaf);
+                }
+            });
+
+            // 长凳
+            const bench = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.08, 0.4), new THREE.MeshStandardMaterial({ color: 0x6b5344, roughness: 0.8 }));
+            bench.position.set(0, 0.4, -halfW + 1);
+            bench.castShadow = true;
+            roomGroup.add(bench);
+            [-0.5, 0.5].forEach(x => {
+                const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.4, 0.35), new THREE.MeshStandardMaterial({ color: 0x6b5344, roughness: 0.8 }));
+                leg.position.set(x, 0.2, -halfW + 1);
+                roomGroup.add(leg);
+            });
+
+            // 藤架
+            const pergolaMat = new THREE.MeshStandardMaterial({ color: 0x5a4a3a, roughness: 0.7 });
+            for (let i = -2; i <= 2; i++) {
+                const beam = new THREE.Mesh(new THREE.BoxGeometry(L * 0.9, 0.08, 0.1), pergolaMat);
+                beam.position.set(0, H - 0.3, i * W * 0.15);
+                roomGroup.add(beam);
+            }
+            for (let i = -3; i <= 3; i++) {
+                const beam = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, W * 0.9), pergolaMat);
+                beam.position.set(i * L * 0.12, H - 0.3, 0);
+                roomGroup.add(beam);
+            }
+
+            const gardenLight = new THREE.PointLight(0xffeedd, 0.8, 10);
+            gardenLight.position.set(0, H - 0.5, 0);
+            roomGroup.add(gardenLight);
+        }
+
+        // 穹顶藏馆
+        function buildDomeMuseum(L, W, H) {
+            const radius = L / 2;
+            const segments = 64;
+            floorMesh = new THREE.Mesh(new THREE.CircleGeometry(radius, segments), new THREE.MeshStandardMaterial({ color: 0xe8e4df, roughness: 0.25, metalness: 0.25 }));
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.receiveShadow = true;
+            floorMesh.name = 'floor';
+            roomGroup.add(floorMesh);
+
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0xf5f0e8, roughness: 0.7, side: THREE.DoubleSide, transparent: true, opacity: 1 });
+            const wallSegs = 32;
+            for (let i = 0; i < wallSegs; i++) {
+                const angle1 = (i / wallSegs) * Math.PI * 2;
+                const angle2 = ((i + 1) / wallSegs) * Math.PI * 2;
+                const x1 = Math.cos(angle1) * radius, z1 = Math.sin(angle1) * radius;
+                const x2 = Math.cos(angle2) * radius, z2 = Math.sin(angle2) * radius;
+                const wallLen = 2 * radius * Math.sin(Math.PI / wallSegs);
+                const wall = new THREE.Mesh(new THREE.PlaneGeometry(wallLen, H * 0.7), wallMat.clone());
+                wall.position.set((x1 + x2) / 2, H * 0.35, (z1 + z2) / 2);
+                wall.rotation.y = -Math.atan2(z2 - z1, x2 - x1);
+                wall.receiveShadow = true;
+                const nx = Math.cos((angle1 + angle2) / 2), nz = Math.sin((angle1 + angle2) / 2);
+                wall.userData.outwardNormal = new THREE.Vector3(nx, 0, nz);
+                roomGroup.add(wall);
+                walls.push(wall);
+            }
+
+            // 穹顶
+            const dome = new THREE.Mesh(new THREE.SphereGeometry(radius, segments, segments / 2, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0xf8f4ec, roughness: 0.5, metalness: 0.1, side: THREE.DoubleSide }));
+            dome.position.y = H * 0.35;
+            roomGroup.add(dome);
+
+            // 金色圆环装饰
+            const ringMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.3 });
+            [H * 0.4, H * 0.55, H * 0.7].forEach(y => {
+                const ring = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.95, 0.03, 8, segments), ringMat);
+                ring.rotation.x = Math.PI / 2;
+                ring.position.y = y;
+                roomGroup.add(ring);
+            });
+
+            // 中心柱
+            const pillar = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, H * 0.8, 16), new THREE.MeshStandardMaterial({ color: 0xf0ebe0, roughness: 0.4, metalness: 0.15 }));
+            pillar.position.y = H * 0.4;
+            pillar.castShadow = true;
+            roomGroup.add(pillar);
+            const pillarTop = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 16), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.2 }));
+            pillarTop.position.y = H * 0.8;
+            roomGroup.add(pillarTop);
+
+            // 吊灯环
+            const chandelierRing = new THREE.Mesh(new THREE.TorusGeometry(radius * 0.4, 0.05, 8, 32), new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9 }));
+            chandelierRing.rotation.x = Math.PI / 2;
+            chandelierRing.position.y = H * 0.7;
+            roomGroup.add(chandelierRing);
+            const bulbMat = new THREE.MeshBasicMaterial({ color: 0xfff8e0 });
+            for (let i = 0; i < 8; i++) {
+                const angle = (i / 8) * Math.PI * 2;
+                const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), bulbMat);
+                bulb.position.set(Math.cos(angle) * radius * 0.4, H * 0.68, Math.sin(angle) * radius * 0.4);
+                roomGroup.add(bulb);
+            }
+            const centralLight = new THREE.PointLight(0xfff5e0, 1.5, 12);
+            centralLight.position.set(0, H * 0.6, 0);
+            roomGroup.add(centralLight);
+        }
+
+        // 标准房间（回退使用雅致中厅）
+        function buildStandardRoom(L, W, H) {
+            buildElegantHall(L, W, H);
+        }
+
+        // ---------- 纹理生成（保持原样） ----------
+        function makeWoodFloorTexture(L, W) { /* 同上，省略代码略 */ 
+            const size = 512, cvs = document.createElement('canvas');
+            cvs.width = size; cvs.height = size;
+            const ctx = cvs.getContext('2d');
+            ctx.fillStyle = '#c9a86c'; ctx.fillRect(0, 0, size, size);
+            const plankWidth = size / 4;
+            for (let i = 0; i < 4; i++) {
+                ctx.fillStyle = i % 2 === 0 ? '#b8956a' : '#d4b078';
+                ctx.fillRect(i * plankWidth, 0, plankWidth - 2, size);
+                ctx.strokeStyle = 'rgba(90,60,30,0.15)';
+                for (let y = 0; y < size; y += 8) {
+                    ctx.beginPath();
+                    ctx.moveTo(i * plankWidth, y);
+                    ctx.lineTo((i + 1) * plankWidth, y + Math.random() * 4);
+                    ctx.stroke();
+                }
+            }
+            const tex = new THREE.CanvasTexture(cvs);
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(L / 2, W / 2);
+            return tex;
+        }
+        function makeBrickWallTexture(L, H) { /* ... 同上 */ 
+            const size = 512, cvs = document.createElement('canvas');
+            cvs.width = size; cvs.height = size;
+            const ctx = cvs.getContext('2d');
+            ctx.fillStyle = '#8b5a3c'; ctx.fillRect(0, 0, size, size);
+            const brickW = size / 6, brickH = size / 8;
+            for (let y = 0; y < 8; y++) {
+                const offset = y % 2 === 0 ? 0 : brickW / 2;
+                for (let x = -1; x < 7; x++) {
+                    const shade = 0.85 + Math.random() * 0.3;
+                    ctx.fillStyle = `rgb(${Math.floor(139*shade)},${Math.floor(90*shade)},${Math.floor(60*shade)})`;
+                    ctx.fillRect(x * brickW + offset + 2, y * brickH + 2, brickW - 4, brickH - 4);
+                }
+            }
+            const tex = new THREE.CanvasTexture(cvs);
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(L / 3, H / 3);
+            return tex;
+        }
+        function makeGrassTexture(L, W) { /* ... 同上 */ 
+            const size = 512, cvs = document.createElement('canvas');
+            cvs.width = size; cvs.height = size;
+            const ctx = cvs.getContext('2d');
+            ctx.fillStyle = '#5a8a3a'; ctx.fillRect(0, 0, size, size);
+            for (let i = 0; i < 2000; i++) {
+                const x = Math.random() * size, y = Math.random() * size;
+                ctx.strokeStyle = `rgba(${60 + Math.random()*40},${100 + Math.random()*50},40,0.6)`;
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+                ctx.lineTo(x + (Math.random()-0.5)*4, y - (Math.random()*15+5));
+                ctx.stroke();
+            }
+            const tex = new THREE.CanvasTexture(cvs);
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(L / 5, W / 5);
+            return tex;
+        }
+        function makeIndustrialFloorTexture(L, W) {
+            const size = 512, cvs = document.createElement('canvas');
+            cvs.width = size; cvs.height = size;
+            const ctx = cvs.getContext('2d');
+            ctx.fillStyle = '#4a4a4a'; ctx.fillRect(0, 0, size, size);
+            ctx.strokeStyle = '#333333';
+            const gridSize = size / 8;
+            for (let i = 0; i <= 8; i++) {
+                ctx.beginPath(); ctx.moveTo(i * gridSize, 0); ctx.lineTo(i * gridSize, size); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(0, i * gridSize); ctx.lineTo(size, i * gridSize); ctx.stroke();
+            }
+            const tex = new THREE.CanvasTexture(cvs);
+            tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+            tex.repeat.set(L / 2, W / 2);
+            return tex;
+        }
+
+        // ---------- 展品管理 ----------
+        function refreshItems() {
+            itemLoadVersion += 1;
+            const version = itemLoadVersion;
+            while (itemsGroup.children.length) disposeObject(itemsGroup.children.pop());
+            const gltfLoader = new GLTFLoader();
+            placedItems.forEach(p => addExhibit(p, gltfLoader, version));
+        }
+
+        function isGltfUrl(url) {
+            if (!url || typeof url !== 'string') return false;
+            try {
+                const path = new URL(url, window.location.href).pathname;
+                return /\.(glb|gltf)$/i.test(path);
+            } catch (e) {
+                return /\.(glb|gltf)(?:$|\?)/i.test(url);
+            }
+        }
+
+        function addExhibit(p, gltfLoader, version = itemLoadVersion) {
+            const group = new THREE.Group();
+            const L = roomConfig.lenM || 6, W = roomConfig.widM || 4;
+            const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.32, 0.5, 24), new THREE.MeshStandardMaterial({ color: 0xc9b890, roughness: 0.55 }));
+            pedestal.position.y = 0.25;
+            pedestal.castShadow = true;
+            group.add(pedestal);
+
+            const modelUrl = p.glbUrl || p.modelUrl || '';
+            const hasModel = isGltfUrl(modelUrl);
+            console.log('[scene-viewer] add exhibit:', { item: p, modelUrl, hasModel });
+            if (hasModel) {
+                gltfLoader.load(modelUrl,
+                    gltf => {
+                        if (version !== itemLoadVersion) return;
+                        console.log('[scene-viewer] gltf loaded:', modelUrl);
+                        const obj = gltf.scene;
+                        const box = new THREE.Box3().setFromObject(obj);
+                        const size = box.getSize(new THREE.Vector3());
+                        const maxDim = Math.max(size.x, size.y, size.z);
+                        if (!Number.isFinite(maxDim) || maxDim <= 0) {
+                            console.warn('[scene-viewer] gltf has empty bounds, using fallback:', { modelUrl, size });
+                            addFallbackMesh(group, p, L, W);
+                            return;
+                        }
+                        const scale = 0.4 / maxDim;
+                        obj.scale.setScalar(scale);
+                        const center = box.getCenter(new THREE.Vector3());
+                        const pedestalTopY = 0.5;
+                        obj.position.set(-center.x * scale, pedestalTopY + 0.04 - box.min.y * scale, -center.z * scale);
+                        obj.traverse(child => {
+                            if (child.isMesh) {
+                                child.castShadow = true;
+                                child.receiveShadow = true;
+                                if (child.material) {
+                                    const materials = Array.isArray(child.material) ? child.material : [child.material];
+                                    materials.forEach(mat => {
+                                        mat.side = THREE.DoubleSide;
+                                        mat.needsUpdate = true;
+                                    });
+                                }
+                            }
+                        });
+                        group.add(obj);
+                        finalizeExhibit(group, p, L, W);
+                    },
+                    undefined,
+                    err => {
+                        if (version !== itemLoadVersion) return;
+                        console.warn('[scene-viewer] gltf load failed, using fallback:', { modelUrl, err });
+                        addFallbackMesh(group, p, L, W);
+                    }
+                );
+            } else {
+                console.warn('[scene-viewer] missing glb/gltf url, using fallback:', p);
+                addFallbackMesh(group, p, L, W);
+            }
+        }
+
+        function addFallbackMesh(group, p, L, W) {
+            const fallback = new THREE.Mesh(new THREE.SphereGeometry(0.25, 16, 16), new THREE.MeshStandardMaterial({ color: 0xc9b890, roughness: 0.4, metalness: 0.1 }));
+            fallback.position.y = 0.75;
+            fallback.castShadow = true;
+            group.add(fallback);
+            finalizeExhibit(group, p, L, W);
+        }
+
+        function finalizeExhibit(group, p, L, W) {
+            const x = (p.x / 100 - 0.5) * L;
+            const z = (p.y / 100 - 0.5) * W;
+            group.position.set(x, 0, z);
+            group.userData.uid = p.uid;
+            group.userData.item = p;
+            itemsGroup.add(group);
+        }
+
+        function disposeObject(obj) {
+            if (!obj) return;
+            obj.traverse(child => {
+                if (child.geometry) child.geometry.dispose();
+                if (child.material) {
+                    if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                    else child.material.dispose();
+                }
+            });
+        }
+
+        // ---------- 墙壁可见性更新 ----------
+        function updateWallVisibility() {
+            if (!walls.length) return;
+            const camVec = camera.position.clone().sub(controls.target);
+            camVec.y = 0;
+            if (camVec.lengthSq() < 1e-6) return;
+            camVec.normalize();
+            let maxDot = -Infinity;
+            walls.forEach(w => {
+                const n = w.userData.outwardNormal;
+                if (n) {
+                    const d = n.x * camVec.x + n.z * camVec.z;
+                    w.userData._dot = d;
+                    if (d > maxDot) maxDot = d;
+                }
+            });
+            walls.forEach(w => {
+                const d = w.userData._dot;
+                let goal = d >= Math.max(0.35, maxDot - 0.05) ? 0 : (d > 0.1 ? 0.5 : 1);
+                const mat = w.material;
+                mat.opacity += (goal - mat.opacity) * 0.2;
+                mat.depthWrite = mat.opacity > 0.7;
+                w.visible = mat.opacity > 0.01;
+            });
+        }
+
+        // ---------- 相机重置 ----------
+        function resetCamera() {
+            const L = roomConfig.lenM || 6;
+            const W = roomConfig.widM || 4;
+            const H = roomConfig.heightM || 3.2;
+            const dist = Math.sqrt(L * L + W * W + H * H) * 0.65;
+            camera.position.set(dist * 0.5, H + dist * 0.4, dist * 0.85);
+            controls.target.set(0, H * 0.3, 0);
+            controls.update();
+        }
+
+        // ---------- 点击放置 ----------
+        function getIntersection(clientX, clientY) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+            pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(pointer, camera);
+            if (!floorMesh) return [];
+            return raycaster.intersectObject(floorMesh, false);
+        }
+
+        function getPlacedGroupFromObject(obj) {
+            let cur = obj;
+            while (cur && cur !== itemsGroup) {
+                if (cur.userData && cur.userData.uid) return cur;
+                cur = cur.parent;
+            }
+            return null;
+        }
+
+        function getExhibitIntersection(clientX, clientY) {
+            const rect = renderer.domElement.getBoundingClientRect();
+            pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+            pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(pointer, camera);
+            const hits = raycaster.intersectObjects(itemsGroup.children, true);
+            for (const hit of hits) {
+                const group = getPlacedGroupFromObject(hit.object);
+                if (group) return { hit, group };
+            }
+            return null;
+        }
+
+        function updatePlacedItemFromGroup(group) {
+            const item = placedItems.find(p => p.uid === group.userData.uid);
+            if (!item) return;
+            const L = roomConfig.lenM || 6;
+            const W = roomConfig.widM || 4;
+            item.x = Math.min(99, Math.max(1, (group.position.x / L + 0.5) * 100));
+            item.y = Math.min(99, Math.max(1, (group.position.z / W + 0.5) * 100));
+            group.userData.item = item;
+        }
+
+        function moveGroupToFloorPoint(group, point) {
+            const L = roomConfig.lenM || 6;
+            const W = roomConfig.widM || 4;
+            group.position.x = Math.min(L / 2, Math.max(-L / 2, point.x));
+            group.position.z = Math.min(W / 2, Math.max(-W / 2, point.z));
+            updatePlacedItemFromGroup(group);
+        }
+
+        function onPointerDown(e) {
+            if (e.button !== undefined && e.button !== 0) return;
+            const picked = getExhibitIntersection(e.clientX, e.clientY);
+            if (!picked) return;
+            const hits = getIntersection(e.clientX, e.clientY);
+            dragState = {
+                pointerId: e.pointerId,
+                group: picked.group,
+                startX: e.clientX,
+                startY: e.clientY,
+                moved: false
+            };
+            if (hits.length) moveGroupToFloorPoint(dragState.group, hits[0].point);
+            suppressNextPlacement = true;
+            if (controls) controls.enabled = false;
+            renderer.domElement.style.cursor = 'grabbing';
+            if (renderer.domElement.setPointerCapture) renderer.domElement.setPointerCapture(e.pointerId);
+            e.preventDefault();
+        }
+
+        function onPointerMove(e) {
+            if (!dragState || dragState.pointerId !== e.pointerId) return;
+            const dx = e.clientX - dragState.startX;
+            const dy = e.clientY - dragState.startY;
+            if (Math.hypot(dx, dy) > 3) dragState.moved = true;
+            const hits = getIntersection(e.clientX, e.clientY);
+            if (hits.length) moveGroupToFloorPoint(dragState.group, hits[0].point);
+            e.preventDefault();
+        }
+
+        function onPointerUp(e) {
+            if (!dragState || dragState.pointerId !== e.pointerId) return;
+            updatePlacedItemFromGroup(dragState.group);
+            if (controls) controls.enabled = true;
+            renderer.domElement.style.cursor = '';
+            if (renderer.domElement.releasePointerCapture) renderer.domElement.releasePointerCapture(e.pointerId);
+            sendToParent({ type: 'itemsUpdated', placed: placedItems });
+            if (dragState.moved) showToast('Moved');
+            dragState = null;
+            suppressNextPlacement = true;
+            e.preventDefault();
+        }
+
+        function onCanvasClick(e) {
+            if (suppressNextPlacement) {
+                suppressNextPlacement = false;
+                return;
+            }
+            handlePlacement(e.clientX, e.clientY);
+        }
+        function onCanvasTouchEnd(e) {
+            if (suppressNextPlacement) {
+                suppressNextPlacement = false;
+                return;
+            }
+            e.preventDefault();
+            if (e.changedTouches.length === 1) {
+                const t = e.changedTouches[0];
+                handlePlacement(t.clientX, t.clientY);
+            }
+        }
+
+        function handlePlacement(clientX, clientY) {
+            if (!activeModel) {
+                showToast('请先在藏品列表中选择一件展品');
+                return;
+            }
+            const hits = getIntersection(clientX, clientY);
+            if (!hits.length) return;
+            const point = hits[0].point;
+            const L = roomConfig.lenM || 6;
+            const W = roomConfig.widM || 4;
+            const x = Math.min(99, Math.max(1, (point.x / L + 0.5) * 100));
+            const y = Math.min(99, Math.max(1, (point.z / W + 0.5) * 100));
+            const newItem = {
+                uid: 'p' + Date.now() + Math.random().toString(36).substr(2, 5),
+                id: activeModel.id,
+                icon: activeModel.icon || '📦',
+                name: activeModel.name || '展品',
+                modelUrl: activeModel.glbUrl || activeModel.modelUrl || '',
+                glbUrl: activeModel.glbUrl || activeModel.modelUrl || '',
+                x, y
+            };
+            placedItems.push(newItem);
+            refreshItems();
+            sendToParent({ type: 'addItem', item: newItem });
+            activeModel = null;
+            sendToParent({ type: 'modelDeselected' });
+            showToast('已放置展品');
+        }
+
+        // ---------- 与父窗口通信 ----------
+        function sendToParent(msg) {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage(msg, '*');
+            }
+        }
+
+        function onParentMessage(event) {
+            const data = event.data;
+            if (!data || !data.type) return;
+            switch (data.type) {
+                case 'selectModel':
+                    activeModel = data.model;
+                    showToast(activeModel ? `已选中: ${activeModel.name}` : '已取消选中');
+                    break;
+                case 'removeItem':
+                    if (data.uid) {
+                        const idx = placedItems.findIndex(p => p.uid === data.uid);
+                        if (idx > -1) {
+                            placedItems.splice(idx, 1);
+                            refreshItems();
+                            sendToParent({ type: 'itemsUpdated', placed: placedItems });
+                        }
+                    }
+                    break;
+                case 'clearAll':
+                    placedItems = [];
+                    refreshItems();
+                    sendToParent({ type: 'itemsUpdated', placed: [] });
+                    break;
+                case 'resetCamera':
+                    resetCamera();
+                    break;
+            }
+        }
+
+        initScene();
+        sendToParent({ type: 'itemsUpdated', placed: placedItems });
+    </script>
+</body>
+</html>

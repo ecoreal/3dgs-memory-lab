@@ -1,0 +1,44 @@
+# ===== 敏感配置(切勿提交,泄露应急后用模板替代)=====
+3-d_object_ai_back/config.ini
+3-d_object_back/src/main/resources/application.properties
+3-d_object_back/src/main/resources/application-local.properties
+application-local.properties
+
+# ===== 运行时日志 / 产物 =====
+nohup.out
+**/nohup.out
+*.log
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pcm
+.idea/
+
+# ===== Java / Maven =====
+target/
+HELP.md
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+.springBeans
+.sts4-cache/
+
+# ===== 前端 (uni-app / Vite) =====
+node_modules/
+unpackage/
+.vite/
+.hbuilderx/
+dist/
+
+# ===== 编辑器 =====
+.vscode/
+
+# ===== 大体积测试素材(不入库)=====
+3-d-objiect-studio/static/models_for_test/
+
+# ===== 运行时上传文件 =====
+uploads/
